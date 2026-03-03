@@ -1,0 +1,396 @@
+"""
+Supabase client and all database operations for JobHunt Int.
+Tables already exist in Supabase — this file only reads/writes data.
+"""
+
+import os
+from datetime import datetime
+from pathlib import Path
+from dotenv import load_dotenv, dotenv_values
+from supabase import create_client, Client
+
+# Load .env from project root (where app.py and .env live)
+_project_root = Path(__file__).resolve().parent.parent
+_env_path = _project_root / ".env"
+
+# 1) Try to load into process env (for all modules)
+load_dotenv(_env_path)
+
+# 2) Also read the file directly (handles Windows BOM / Streamlit cwd issues)
+_file_env = {}
+if _env_path.exists():
+    try:
+        raw = dotenv_values(_env_path)
+        # Normalize: strip BOM from keys (Windows UTF-8 BOM breaks first key)
+        for k, v in (raw or {}).items():
+            key = k.lstrip("\ufeff").strip()
+            if key and v is not None:
+                _file_env[key] = v.strip() if isinstance(v, str) else v
+    except Exception:
+        _file_env = {}
+
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or _file_env.get("SUPABASE_URL") or "").strip()
+SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or _file_env.get("SUPABASE_KEY") or "").strip()
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise EnvironmentError(
+        f"SUPABASE_URL and SUPABASE_KEY must be set in .env file at {_env_path}."
+    )
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+USER_ID = "default_user"
+
+
+# ═══════════════════════════════════════════════════════════
+# STUDENT PROFILE
+# ═══════════════════════════════════════════════════════════
+
+def get_student_profile() -> dict | None:
+    """Retrieve the student profile for default_user."""
+    try:
+        response = (
+            supabase.table("student_profile")
+            .select("*")
+            .eq("user_id", USER_ID)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return response.data[0]
+        return None
+    except Exception as e:
+        print(f"[get_student_profile] Error: {e}")
+        return None
+
+
+def save_student_profile(data: dict) -> dict:
+    """Upsert (insert or update) the student profile for default_user."""
+    try:
+        data["user_id"] = USER_ID
+        data["updated_at"] = datetime.utcnow().isoformat()
+        response = (
+            supabase.table("student_profile")
+            .upsert(data, on_conflict="user_id")
+            .execute()
+        )
+        return response.data[0] if response.data else {}
+    except Exception as e:
+        print(f"[save_student_profile] Error: {e}")
+        raise
+
+
+def update_student_profile(updates: dict) -> dict:
+    """Update specific fields on the existing student profile."""
+    try:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        response = (
+            supabase.table("student_profile")
+            .update(updates)
+            .eq("user_id", USER_ID)
+            .execute()
+        )
+        return response.data[0] if response.data else {}
+    except Exception as e:
+        print(f"[update_student_profile] Error: {e}")
+        raise
+
+
+# ═══════════════════════════════════════════════════════════
+# RESUMES
+# ═══════════════════════════════════════════════════════════
+
+def save_resume(name: str, content: str, embedding: list) -> dict:
+    """Save a new resume with its embedding vector."""
+    try:
+        response = (
+            supabase.table("resumes")
+            .insert({
+                "user_id": USER_ID,
+                "name": name,
+                "content": content,
+                "embedding": embedding,
+            })
+            .execute()
+        )
+        return response.data[0] if response.data else {}
+    except Exception as e:
+        print(f"[save_resume] Error: {e}")
+        raise
+
+
+def get_all_resumes() -> list:
+    """Get all resumes for default_user ordered by created_at desc."""
+    try:
+        response = (
+            supabase.table("resumes")
+            .select("*")
+            .eq("user_id", USER_ID)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[get_all_resumes] Error: {e}")
+        return []
+
+
+def get_resume_by_id(resume_id: str) -> dict | None:
+    """Get a single resume by its ID."""
+    try:
+        response = (
+            supabase.table("resumes")
+            .select("*")
+            .eq("id", resume_id)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return response.data[0]
+        return None
+    except Exception as e:
+        print(f"[get_resume_by_id] Error: {e}")
+        return None
+
+
+def update_resume_content(resume_id: str, content: str) -> dict:
+    """Update the text content of a resume."""
+    try:
+        response = (
+            supabase.table("resumes")
+            .update({
+                "content": content,
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+            .eq("id", resume_id)
+            .execute()
+        )
+        return response.data[0] if response.data else {}
+    except Exception as e:
+        print(f"[update_resume_content] Error: {e}")
+        raise
+
+
+def delete_resume(resume_id: str):
+    """Delete a resume by its ID."""
+    try:
+        supabase.table("resumes").delete().eq("id", resume_id).execute()
+    except Exception as e:
+        print(f"[delete_resume] Error: {e}")
+        raise
+
+
+# ═══════════════════════════════════════════════════════════
+# JOBS
+# ═══════════════════════════════════════════════════════════
+
+def save_jobs(jobs: list) -> list:
+    """Upsert jobs on the url column, ignoring conflicts."""
+    try:
+        if not jobs:
+            return []
+        response = (
+            supabase.table("jobs")
+            .upsert(jobs, on_conflict="url")
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[save_jobs] Error: {e}")
+        return []
+
+
+def get_all_jobs() -> list:
+    """Get all jobs ordered by fetched_at desc."""
+    try:
+        response = (
+            supabase.table("jobs")
+            .select("*")
+            .order("fetched_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[get_all_jobs] Error: {e}")
+        return []
+
+
+def get_sponsored_jobs() -> list:
+    """Get jobs where h1b_sponsor_history is true."""
+    try:
+        response = (
+            supabase.table("jobs")
+            .select("*")
+            .eq("h1b_sponsor_history", True)
+            .order("fetched_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[get_sponsored_jobs] Error: {e}")
+        return []
+
+
+# ═══════════════════════════════════════════════════════════
+# APPLICATIONS
+# ═══════════════════════════════════════════════════════════
+
+def save_application(job_id: str, resume_id: str,
+                     cover_letter: str, rewritten_resume: str) -> dict:
+    """Create a new application draft."""
+    try:
+        response = (
+            supabase.table("applications")
+            .insert({
+                "user_id": USER_ID,
+                "job_id": job_id,
+                "resume_id": resume_id,
+                "cover_letter": cover_letter,
+                "rewritten_resume": rewritten_resume,
+                "status": "draft",
+            })
+            .execute()
+        )
+        return response.data[0] if response.data else {}
+    except Exception as e:
+        print(f"[save_application] Error: {e}")
+        raise
+
+
+def get_applications() -> list:
+    """Get all applications with joined job and resume data."""
+    try:
+        response = (
+            supabase.table("applications")
+            .select("*, jobs(*), resumes(*)")
+            .eq("user_id", USER_ID)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[get_applications] Error: {e}")
+        return []
+
+
+def update_application_status(app_id: str, status: str):
+    """Update the status of an application."""
+    try:
+        supabase.table("applications").update(
+            {"status": status}
+        ).eq("id", app_id).execute()
+    except Exception as e:
+        print(f"[update_application_status] Error: {e}")
+        raise
+
+
+def update_cover_letter(app_id: str, cover_letter: str):
+    """Update the cover letter of an application."""
+    try:
+        supabase.table("applications").update(
+            {"cover_letter": cover_letter}
+        ).eq("id", app_id).execute()
+    except Exception as e:
+        print(f"[update_cover_letter] Error: {e}")
+        raise
+
+
+# ═══════════════════════════════════════════════════════════
+# CAREER COACH MEMORY (conversations)
+# ═══════════════════════════════════════════════════════════
+
+def save_message(role: str, content: str):
+    """Save a chat message to the conversations table."""
+    try:
+        supabase.table("conversations").insert({
+            "user_id": USER_ID,
+            "role": role,
+            "content": content,
+        }).execute()
+    except Exception as e:
+        print(f"[save_message] Error: {e}")
+        raise
+
+
+def get_conversation_history(limit: int = 30) -> list:
+    """Get conversation history ordered by created_at ascending."""
+    try:
+        response = (
+            supabase.table("conversations")
+            .select("*")
+            .eq("user_id", USER_ID)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[get_conversation_history] Error: {e}")
+        return []
+
+
+def clear_conversation_history():
+    """Delete all conversation history for default_user."""
+    try:
+        supabase.table("conversations").delete().eq(
+            "user_id", USER_ID
+        ).execute()
+    except Exception as e:
+        print(f"[clear_conversation_history] Error: {e}")
+        raise
+
+
+# ═══════════════════════════════════════════════════════════
+# IMMIGRATION NEWS
+# ═══════════════════════════════════════════════════════════
+
+def save_immigration_news(articles: list):
+    """Upsert immigration news articles on the url column."""
+    try:
+        if not articles:
+            return
+        supabase.table("immigration_news").upsert(
+            articles, on_conflict="url"
+        ).execute()
+    except Exception as e:
+        print(f"[save_immigration_news] Error: {e}")
+        raise
+
+
+def get_immigration_news(limit: int = 6) -> list:
+    """Get immigration news ordered by published_at desc."""
+    try:
+        response = (
+            supabase.table("immigration_news")
+            .select("*")
+            .order("published_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"[get_immigration_news] Error: {e}")
+        return []
+
+
+def get_last_news_fetch_time() -> datetime | None:
+    """Return fetched_at of the most recent row in immigration_news."""
+    try:
+        response = (
+            supabase.table("immigration_news")
+            .select("fetched_at")
+            .order("fetched_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            fetched = response.data[0]["fetched_at"]
+            if fetched:
+                return datetime.fromisoformat(
+                    fetched.replace("Z", "+00:00")
+                )
+        return None
+    except Exception as e:
+        print(f"[get_last_news_fetch_time] Error: {e}")
+        return None
+

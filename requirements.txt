@@ -1,0 +1,12 @@
+streamlit
+supabase
+openai
+tavily-python
+pdfplumber
+python-docx
+httpx>=0.26.0
+python-dotenv
+tiktoken
+pandas
+feedparser
+
