@@ -40,6 +40,20 @@ from utils.ats_scorer import score_resume_against_job
 
 # ── Helpers ────────────────────────────────────────────────
 def _strip_html(text: str) -> str:
+    from datetime import date, datetime
+
+def _safe_date(value, default=None):
+    """Convert saved string/ISO date into a Python date for Streamlit date_input."""
+    if default is None:
+        default = date.today()
+    if not value:
+        return default
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except Exception:
+        return default
     """Remove HTML tags from text (some RSS feeds return raw HTML)."""
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
@@ -154,11 +168,10 @@ with tab1:
                 ),
             )
         with col_a4:
-            graduation_date = st.text_input(
+            graduation_date = st.date_input(
                 "Graduation Date",
-                value=profile.get("graduation_date", ""),
-                placeholder="December 2026",
-            )
+                value=_safe_date(profile.get("graduation_date", "")),
+    )
         with col_a5:
             gpa = st.text_input(
                 "GPA",
@@ -189,12 +202,12 @@ with tab1:
         with col_v3:
             opt_start_date = st.text_input(
                 "OPT Start Date",
-                value=profile.get("opt_start_date", ""),
+                value=_safe_date(profile.get("opt_start_date", "")),
             )
         with col_v4:
             opt_end_date = st.text_input(
                 "OPT End Date",
-                value=profile.get("opt_end_date", ""),
+                value=_safe_date(profile.get("opt_end_date", "")),
             )
 
         stem_opt_eligible = st.checkbox(
@@ -204,9 +217,9 @@ with tab1:
 
         stem_opt_end_date = ""
         if stem_opt_eligible:
-            stem_opt_end_date = st.text_input(
+            stem_opt_end_date = st.date_input(
                 "STEM OPT End Date",
-                value=profile.get("stem_opt_end_date", ""),
+                value=_safe_date(profile.get("stem_opt_end_date", "")),
             )
 
         # ── Career Preferences ─────────────────────────────────
@@ -257,13 +270,13 @@ with tab1:
                 "university": university,
                 "major": major,
                 "degree_level": degree_level,
-                "graduation_date": graduation_date,
+                "graduation_date":str(graduation_date),
                 "gpa": gpa,
                 "visa_type": visa_type,
-                "opt_start_date": opt_start_date,
-                "opt_end_date": opt_end_date,
+                "opt_start_date": str(opt_start_date),
+                "opt_end_date": str(opt_end_date),
                 "stem_opt_eligible": stem_opt_eligible,
-                "stem_opt_end_date": stem_opt_end_date,
+                "stem_opt_end_date": str(stem_opt_end_date) if stem_opt_eligible else "",
                 "country_of_origin": country_of_origin,
                 "target_roles": target_roles,
                 "target_locations": target_locations,
