@@ -39,8 +39,11 @@ from agents.resume_agent import generate_cover_letter, rewrite_resume_for_job
 from utils.ats_scorer import score_resume_against_job
 
 # ── Helpers ────────────────────────────────────────────────
+from datetime import date, datetime
+
 def _strip_html(text: str) -> str:
-    from datetime import date, datetime
+    """Remove HTML tags from text (some RSS feeds return raw HTML)."""
+    return re.sub(r"<[^>]+>", "", text or "").strip()
 
 def _safe_date(value, default=None):
     """Convert saved string/ISO date into a Python date for Streamlit date_input."""
@@ -171,7 +174,7 @@ with tab1:
             graduation_date = st.date_input(
                 "Graduation Date",
                 value=_safe_date(profile.get("graduation_date", "")),
-    )
+            )
         with col_a5:
             gpa = st.text_input(
                 "GPA",
@@ -200,12 +203,12 @@ with tab1:
 
         col_v3, col_v4 = st.columns(2)
         with col_v3:
-            opt_start_date = st.text_input(
+            opt_start_date = st.date_input(
                 "OPT Start Date",
                 value=_safe_date(profile.get("opt_start_date", "")),
             )
         with col_v4:
-            opt_end_date = st.text_input(
+            opt_end_date = st.date_input(
                 "OPT End Date",
                 value=_safe_date(profile.get("opt_end_date", "")),
             )
