@@ -107,148 +107,153 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ════════════════════════════════════════════════════════════
 
 with tab1:
-    profile = get_student_profile()
+    profile = get_student_profile() or {}
 
-    # ── Personal Information ───────────────────────────────
-    st.subheader("Personal Information")
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        name = st.text_input(
-            "Full Name",
-            value=profile.get("name", "") if profile else "",
-            placeholder="Sat Adhikari",
-        )
-    with col_p2:
-        email = st.text_input(
-            "Email",
-            value=profile.get("email", "") if profile else "",
-            placeholder="sat@gmail.com",
+    # ✅ Step 1: Put all inputs inside a form (smoother UX)
+    with st.form("profile_form"):
+
+        # ── Personal Information ───────────────────────────────
+        st.subheader("Personal Information")
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            name = st.text_input(
+                "Full Name",
+                value=profile.get("name", ""),
+                placeholder="Sat Adhikari",
+            )
+        with col_p2:
+            email = st.text_input(
+                "Email",
+                value=profile.get("email", ""),
+                placeholder="sat@gmail.com",
+            )
+
+        # ── Academic Information ───────────────────────────────
+        st.subheader("Academic Information")
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            university = st.text_input(
+                "University",
+                value=profile.get("university", ""),
+            )
+        with col_a2:
+            major = st.text_input(
+                "Major",
+                value=profile.get("major", ""),
+            )
+
+        col_a3, col_a4, col_a5 = st.columns(3)
+        with col_a3:
+            degree_level = st.selectbox(
+                "Degree Level",
+                ["BS", "MS", "PhD", "Other"],
+                index=(
+                    ["BS", "MS", "PhD", "Other"].index(profile.get("degree_level"))
+                    if profile.get("degree_level") in ["BS", "MS", "PhD", "Other"]
+                    else 0
+                ),
+            )
+        with col_a4:
+            graduation_date = st.text_input(
+                "Graduation Date",
+                value=profile.get("graduation_date", ""),
+                placeholder="December 2026",
+            )
+        with col_a5:
+            gpa = st.text_input(
+                "GPA",
+                value=profile.get("gpa", ""),
+            )
+
+        # ── Visa & Immigration ─────────────────────────────────
+        st.subheader("Visa & Immigration")
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            visa_options = ["F-1", "J-1", "OPT", "STEM OPT", "Other"]
+            visa_type = st.selectbox(
+                "Visa Type",
+                visa_options,
+                index=(
+                    visa_options.index(profile.get("visa_type"))
+                    if profile.get("visa_type") in visa_options
+                    else 0
+                ),
+            )
+        with col_v2:
+            country_of_origin = st.text_input(
+                "Country of Origin",
+                value=profile.get("country_of_origin", ""),
+            )
+
+        col_v3, col_v4 = st.columns(2)
+        with col_v3:
+            opt_start_date = st.text_input(
+                "OPT Start Date",
+                value=profile.get("opt_start_date", ""),
+            )
+        with col_v4:
+            opt_end_date = st.text_input(
+                "OPT End Date",
+                value=profile.get("opt_end_date", ""),
+            )
+
+        stem_opt_eligible = st.checkbox(
+            "STEM OPT Eligible",
+            value=bool(profile.get("stem_opt_eligible", False)),
         )
 
-    # ── Academic Information ───────────────────────────────
-    st.subheader("Academic Information")
-    col_a1, col_a2 = st.columns(2)
-    with col_a1:
-        university = st.text_input(
-            "University",
-            value=profile.get("university", "") if profile else "",
-        )
-    with col_a2:
-        major = st.text_input(
-            "Major",
-            value=profile.get("major", "") if profile else "",
-        )
+        stem_opt_end_date = ""
+        if stem_opt_eligible:
+            stem_opt_end_date = st.text_input(
+                "STEM OPT End Date",
+                value=profile.get("stem_opt_end_date", ""),
+            )
 
-    col_a3, col_a4, col_a5 = st.columns(3)
-    with col_a3:
-        degree_level = st.selectbox(
-            "Degree Level",
-            ["BS", "MS", "PhD", "Other"],
-            index=(
-                ["BS", "MS", "PhD", "Other"].index(profile["degree_level"])
-                if profile and profile.get("degree_level") in ["BS", "MS", "PhD", "Other"]
-                else 0
+        # ── Career Preferences ─────────────────────────────────
+        st.subheader("Career Preferences")
+        target_roles_str = st.text_input(
+            "Target Roles",
+            value=(
+                ", ".join(profile.get("target_roles", []))
+                if profile.get("target_roles")
+                else ""
             ),
+            placeholder="Data Engineer, ML Engineer",
         )
-    with col_a4:
-        graduation_date = st.text_input(
-            "Graduation Date",
-            value=profile.get("graduation_date", "") if profile else "",
-            placeholder="December 2026",
-        )
-    with col_a5:
-        gpa = st.text_input(
-            "GPA",
-            value=profile.get("gpa", "") if profile else "",
-        )
+        st.caption("Comma separated")
 
-    # ── Visa & Immigration ─────────────────────────────────
-    st.subheader("Visa & Immigration")
-    col_v1, col_v2 = st.columns(2)
-    with col_v1:
-        visa_options = ["F-1", "J-1", "OPT", "STEM OPT", "Other"]
-        visa_type = st.selectbox(
-            "Visa Type",
-            visa_options,
-            index=(
-                visa_options.index(profile["visa_type"])
-                if profile and profile.get("visa_type") in visa_options
-                else 0
+        target_locations_str = st.text_input(
+            "Target Locations",
+            value=(
+                ", ".join(profile.get("target_locations", []))
+                if profile.get("target_locations")
+                else ""
             ),
+            placeholder="Dallas TX, Austin TX, Remote",
         )
-    with col_v2:
-        country_of_origin = st.text_input(
-            "Country of Origin",
-            value=profile.get("country_of_origin", "") if profile else "",
-        )
+        st.caption("Comma separated")
 
-    col_v3, col_v4 = st.columns(2)
-    with col_v3:
-        opt_start_date = st.text_input(
-            "OPT Start Date",
-            value=profile.get("opt_start_date", "") if profile else "",
+        open_to_remote = st.checkbox(
+            "Open to Remote",
+            value=bool(profile.get("open_to_remote", True)),
         )
-    with col_v4:
-        opt_end_date = st.text_input(
-            "OPT End Date",
-            value=profile.get("opt_end_date", "") if profile else "",
+        requires_sponsorship = st.checkbox(
+            "Requires Sponsorship",
+            value=bool(profile.get("requires_sponsorship", True)),
         )
 
-    stem_opt_eligible = st.checkbox(
-        "STEM OPT Eligible",
-        value=profile.get("stem_opt_eligible", False) if profile else False,
-    )
-    stem_opt_end_date = ""
-    if stem_opt_eligible:
-        stem_opt_end_date = st.text_input(
-            "STEM OPT End Date",
-            value=profile.get("stem_opt_end_date", "") if profile else "",
-        )
+        # ✅ Step 1: form submit button (replaces st.button)
+        submitted = st.form_submit_button("💾 Save Profile")
 
-    # ── Career Preferences ─────────────────────────────────
-    st.subheader("Career Preferences")
-    target_roles_str = st.text_input(
-        "Target Roles",
-        value=(
-            ", ".join(profile.get("target_roles", []))
-            if profile and profile.get("target_roles")
-            else ""
-        ),
-        placeholder="Data Engineer, ML Engineer",
-    )
-    st.caption("Comma separated")
-
-    target_locations_str = st.text_input(
-        "Target Locations",
-        value=(
-            ", ".join(profile.get("target_locations", []))
-            if profile and profile.get("target_locations")
-            else ""
-        ),
-        placeholder="Dallas TX, Austin TX, Remote",
-    )
-    st.caption("Comma separated")
-
-    open_to_remote = st.checkbox(
-        "Open to Remote",
-        value=profile.get("open_to_remote", True) if profile else True,
-    )
-    requires_sponsorship = st.checkbox(
-        "Requires Sponsorship",
-        value=profile.get("requires_sponsorship", True) if profile else True,
-    )
-
-    if st.button("💾 Save Profile"):
+    # ✅ Save logic runs only when form is submitted
+    if submitted:
         with st.spinner("Saving profile..."):
-            target_roles = [
-                r.strip() for r in target_roles_str.split(",") if r.strip()
-            ]
-            target_locations = [
-                l.strip() for l in target_locations_str.split(",") if l.strip()
-            ]
+            target_roles = [r.strip() for r in target_roles_str.split(",") if r.strip()]
+            target_locations = [l.strip() for l in target_locations_str.split(",") if l.strip()]
+
             profile_data = {
-                "name": name,                           # NEW
-                "email": email,                         # NEW
+                "name": name,
+                "email": email,
                 "university": university,
                 "major": major,
                 "degree_level": degree_level,
@@ -265,6 +270,7 @@ with tab1:
                 "open_to_remote": open_to_remote,
                 "requires_sponsorship": requires_sponsorship,
             }
+
             try:
                 save_student_profile(profile_data)
                 st.success("✅ Profile saved!")
