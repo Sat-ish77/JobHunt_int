@@ -3,6 +3,7 @@ JobHunt Int — Main Streamlit application.
 A job hunting web app for international students on F-1/OPT visas.
 """
 
+import re
 import streamlit as st
 
 st.set_page_config(
@@ -37,6 +38,11 @@ from agents.career_coach import chat_with_coach
 from agents.resume_agent import generate_cover_letter, rewrite_resume_for_job
 from utils.ats_scorer import score_resume_against_job
 
+# ── Helpers ────────────────────────────────────────────────
+def _strip_html(text: str) -> str:
+    """Remove HTML tags from text (some RSS feeds return raw HTML)."""
+    return re.sub(r"<[^>]+>", "", text or "").strip()
+
 # ── Session state init ─────────────────────────────────────
 if "active_resume_id" not in st.session_state:
     st.session_state["active_resume_id"] = None
@@ -70,16 +76,18 @@ with st.sidebar:
     for article in news[:6]:
         icon = SOURCE_COLORS.get(article.get("source", ""), "⚪")
         st.markdown(f"**{icon} {article.get('source', 'Unknown')}**")
-        title = article.get("title", "")
+        title = _strip_html(article.get("title", ""))
+        if not title:
+            continue
         if len(title) > 80:
             title = title[:80] + "..."
         st.markdown(f"_{title}_")
-        summary = article.get("summary", "")
+        summary = _strip_html(article.get("summary", ""))
         if summary:
             st.caption(summary[:120])
         url = article.get("url", "")
         if url:
-            st.link_button("Read →", url, key=f"news_{hash(url)}")
+            st.link_button("Read →", url)
         st.divider()
 
 # ════════════════════════════════════════════════════════════
@@ -101,6 +109,23 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     profile = get_student_profile()
 
+    # ── Personal Information ───────────────────────────────
+    st.subheader("Personal Information")
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        name = st.text_input(
+            "Full Name",
+            value=profile.get("name", "") if profile else "",
+            placeholder="Sat Adhikari",
+        )
+    with col_p2:
+        email = st.text_input(
+            "Email",
+            value=profile.get("email", "") if profile else "",
+            placeholder="sat@gmail.com",
+        )
+
+    # ── Academic Information ───────────────────────────────
     st.subheader("Academic Information")
     col_a1, col_a2 = st.columns(2)
     with col_a1:
@@ -137,6 +162,7 @@ with tab1:
             value=profile.get("gpa", "") if profile else "",
         )
 
+    # ── Visa & Immigration ─────────────────────────────────
     st.subheader("Visa & Immigration")
     col_v1, col_v2 = st.columns(2)
     with col_v1:
@@ -179,6 +205,7 @@ with tab1:
             value=profile.get("stem_opt_end_date", "") if profile else "",
         )
 
+    # ── Career Preferences ─────────────────────────────────
     st.subheader("Career Preferences")
     target_roles_str = st.text_input(
         "Target Roles",
@@ -220,6 +247,8 @@ with tab1:
                 l.strip() for l in target_locations_str.split(",") if l.strip()
             ]
             profile_data = {
+                "name": name,                           # NEW
+                "email": email,                         # NEW
                 "university": university,
                 "major": major,
                 "degree_level": degree_level,
@@ -400,7 +429,6 @@ with tab3:
         )
 
     if jobs:
-        # Score each job if we have an active resume
         if active_resume:
             for job in jobs:
                 if job.get("description"):
@@ -474,8 +502,7 @@ with tab3:
                             )
                         else:
                             with st.spinner(
-                                "Writing cover letter and "
-                                "optimizing resume..."
+                                "Writing cover letter and optimizing resume..."
                             ):
                                 try:
                                     profile = get_student_profile()
@@ -487,19 +514,13 @@ with tab3:
                                         resume=active_resume["content"],
                                         job_title=job.get("title", ""),
                                         company=job.get("company", ""),
-                                        job_description=job.get(
-                                            "description", ""
-                                        ),
+                                        job_description=job.get("description", ""),
                                         student_profile=profile,
                                     )
                                     rewritten = rewrite_resume_for_job(
                                         resume=active_resume["content"],
-                                        job_description=job.get(
-                                            "description", ""
-                                        ),
-                                        missing_keywords=ats[
-                                            "important_missing"
-                                        ],
+                                        job_description=job.get("description", ""),
+                                        missing_keywords=ats["important_missing"],
                                         student_profile=profile,
                                     )
                                     save_application(
@@ -513,9 +534,7 @@ with tab3:
                                         "Check Applications tab."
                                     )
                                 except Exception as e:
-                                    st.error(
-                                        f"Error generating application: {e}"
-                                    )
+                                    st.error(f"Error generating application: {e}")
 
 # ════════════════════════════════════════════════════════════
 # TAB 4 — Applications
@@ -525,9 +544,7 @@ with tab4:
     st.subheader("Your Applications")
 
     applications = get_applications()
-    STATUS_OPTIONS = [
-        "draft", "submitted", "interview", "offer", "rejected",
-    ]
+    STATUS_OPTIONS = ["draft", "submitted", "interview", "offer", "rejected"]
 
     if not applications:
         st.info("Generate applications from the Job Search tab.")
@@ -577,9 +594,7 @@ with tab4:
                     height=250,
                     key=f"cl_{app['id']}",
                 )
-                if st.button(
-                    "💾 Save Cover Letter", key=f"savecl_{app['id']}"
-                ):
+                if st.button("💾 Save Cover Letter", key=f"savecl_{app['id']}"):
                     try:
                         update_cover_letter(app["id"], edited_cl)
                         st.success("Saved!")
@@ -594,9 +609,7 @@ with tab4:
                         key=f"rr_{app['id']}",
                     )
 
-                st.caption(
-                    f"Created: {app.get('created_at', '')[:10]}"
-                )
+                st.caption(f"Created: {app.get('created_at', '')[:10]}")
 
 # ════════════════════════════════════════════════════════════
 # TAB 5 — Career Coach
@@ -639,9 +652,7 @@ with tab5:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    response = chat_with_coach(
-                        user_input, coach_resume_context
-                    )
+                    response = chat_with_coach(user_input, coach_resume_context)
                     st.write(response)
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -653,4 +664,3 @@ with tab5:
             st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
-
