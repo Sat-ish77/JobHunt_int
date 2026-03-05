@@ -5,6 +5,7 @@ A job hunting web app for international students on F-1/OPT visas.
 
 import re
 import streamlit as st
+from datetime import datetime, date
 
 st.set_page_config(
     page_title="JobHunt Int",
@@ -14,6 +15,10 @@ st.set_page_config(
 
 # ── Imports ────────────────────────────────────────────────
 from database.supabase_client import (
+    auth_sign_in,
+    auth_sign_up,
+    auth_sign_out,
+    set_user,
     clear_conversation_history,
     get_all_jobs,
     get_all_resumes,
@@ -43,9 +48,161 @@ def _strip_html(text: str) -> str:
     """Remove HTML tags from text (some RSS feeds return raw HTML)."""
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
+
+def _parse_date(date_str: str) -> date:
+    """Parse date string to date object. Returns None if invalid."""
+    if not date_str:
+        return None
+    try:
+        # Try parsing common formats
+        for fmt in ["%Y-%m-%d", "%B %Y", "%B %d, %Y", "%m/%d/%Y"]:
+            try:
+                return datetime.strptime(date_str, fmt).date()
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
+
+
+def _format_date(d) -> str:
+    """Convert date object to string format."""
+    if d is None:
+        return ""
+    if isinstance(d, str):
+        return d
+    return d.strftime("%Y-%m-%d")
+
+
 # ── Session state init ─────────────────────────────────────
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+if "session" not in st.session_state:
+    st.session_state["session"] = None
+if "user_email" not in st.session_state:
+    st.session_state["user_email"] = None
 if "active_resume_id" not in st.session_state:
     st.session_state["active_resume_id"] = None
+
+
+# ── Authentication Page ────────────────────────────────────
+def show_login_page():
+    """Display login/signup page for unauthenticated users."""
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image("https://cdn-icons-png.flaticon.com/512/163/163801.png", width=80)
+        st.title("🌐 JobHunt Int")
+        st.caption("Job Search Assistant for International Students")
+        
+        tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
+        
+        # ── LOGIN TAB ──
+        with tab_login:
+            st.subheader("Welcome Back!")
+            login_email = st.text_input(
+                "Email", 
+                placeholder="your@email.com",
+                key="login_email"
+            )
+            login_password = st.text_input(
+                "Password",
+                type="password",
+                key="login_password"
+            )
+            
+            if st.button("🔓 Sign In", use_container_width=True):
+                if not login_email or not login_password:
+                    st.error("Please enter email and password.")
+                else:
+                    with st.spinner("Signing in..."):
+                        result = auth_sign_in(login_email, login_password)
+                        if result.get("needs_confirmation"):
+                            st.warning(
+                                f"📧 Your email ({login_email}) hasn't been confirmed yet. "
+                                f"Check your inbox for a confirmation link and verify your email, then try logging in again."
+                            )
+                        elif result["error"]:
+                            st.error(f"Login failed: {result['error']}")
+                        elif result["user"] and result["session"]:
+                            st.session_state["user"] = result["user"]
+                            st.session_state["session"] = result["session"]
+                            st.session_state["user_email"] = login_email
+                            # Set user ID for database operations
+                            user_id = result["user"].id if hasattr(result["user"], "id") else login_email
+                            set_user(user_id)
+                            st.success("✅ Signed in! Refreshing...")
+                            st.rerun()
+                        else:
+                            st.error("Sign in failed. Please check your email and password.")
+        
+        # ── SIGNUP TAB ──
+        with tab_signup:
+            st.subheader("Create Your Account")
+            signup_email = st.text_input(
+                "Email",
+                placeholder="your@email.com",
+                key="signup_email"
+            )
+            signup_password = st.text_input(
+                "Password (min 6 characters)",
+                type="password",
+                key="signup_password"
+            )
+            signup_password_confirm = st.text_input(
+                "Confirm Password",
+                type="password",
+                key="signup_password_confirm"
+            )
+            
+            if st.button("✍️ Create Account", use_container_width=True):
+                if not signup_email:
+                    st.error("Please enter an email.")
+                elif signup_password != signup_password_confirm:
+                    st.error("Passwords do not match.")
+                elif len(signup_password) < 6:
+                    st.error("Password must be at least 6 characters.")
+                else:
+                    with st.spinner("Creating account..."):
+                        result = auth_sign_up(signup_email, signup_password)
+                        if result.get("needs_confirmation"):
+                            st.success(
+                                f"✅ Account created! Check your email ({signup_email}) for a confirmation link. "
+                                f"Click the link to verify your email, then you can log in."
+                            )
+                        elif result["error"]:
+                            st.error(f"Sign up failed: {result['error']}")
+                        elif result["user"]:
+                            if result["session"]:
+                                st.success("✅ Account created and signed in! Redirecting...")
+                                st.session_state["user"] = result["user"]
+                                st.session_state["session"] = result["session"]
+                                st.session_state["user_email"] = signup_email
+                                user_id = result["user"].id if hasattr(result["user"], "id") else signup_email
+                                set_user(user_id)
+                                st.rerun()
+                            else:
+                                st.success(
+                                    f"✅ Account created! Check your email ({signup_email}) for a confirmation link, "
+                                    f"then log in on the Login tab."
+                                )
+                        else:
+                            st.error("Sign up failed. Please try again.")
+        
+        st.divider()
+        st.caption(
+            "🔒 All data is secured with Supabase authentication. "
+            "For immigration decisions, consult your DSO or a licensed immigration attorney."
+        )
+
+
+if st.session_state["user"] is None:
+    # User not logged in — show login page
+    show_login_page()
+    st.stop()  # Stop execution here; don't show main app
+
+# ════════════════════════════════════════════════════════════
+# USER LOGGED IN — Show main app below
+# ════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════
 # SIDEBAR — visible on every tab
@@ -53,6 +210,20 @@ if "active_resume_id" not in st.session_state:
 
 st.sidebar.title("🌐 JobHunt Int")
 st.sidebar.caption("Built for International Students")
+
+# ── Sign Out Button ────────────────────────────────────────
+if st.sidebar.button("🚪 Sign Out", use_container_width=True):
+    auth_sign_out()
+    st.session_state["user"] = None
+    st.session_state["session"] = None
+    st.session_state["user_email"] = None
+    st.session_state["active_resume_id"] = None
+    st.success("Signed out! Redirecting...")
+    st.rerun()
+
+st.sidebar.divider()
+st.sidebar.caption(f"👤 Logged in as: {st.session_state.get('user_email', 'Unknown')}")
+st.sidebar.divider()
 
 st.sidebar.warning(
     "⚠️ For immigration decisions, always consult your DSO "
@@ -151,11 +322,14 @@ with tab1:
             ),
         )
     with col_a4:
-        graduation_date = st.text_input(
+        grad_date_val = profile.get("graduation_date", "") if profile else ""
+        grad_date_parsed = _parse_date(grad_date_val) if grad_date_val else None
+        graduation_date_obj = st.date_input(
             "Graduation Date",
-            value=profile.get("graduation_date", "") if profile else "",
-            placeholder="December 2026",
+            value=grad_date_parsed,
+            format="YYYY-MM-DD",
         )
+        graduation_date = _format_date(graduation_date_obj)
     with col_a5:
         gpa = st.text_input(
             "GPA",
@@ -184,15 +358,23 @@ with tab1:
 
     col_v3, col_v4 = st.columns(2)
     with col_v3:
-        opt_start_date = st.text_input(
+        opt_start_val = profile.get("opt_start_date", "") if profile else ""
+        opt_start_parsed = _parse_date(opt_start_val) if opt_start_val else None
+        opt_start_obj = st.date_input(
             "OPT Start Date",
-            value=profile.get("opt_start_date", "") if profile else "",
+            value=opt_start_parsed,
+            format="YYYY-MM-DD",
         )
+        opt_start_date = _format_date(opt_start_obj)
     with col_v4:
-        opt_end_date = st.text_input(
+        opt_end_val = profile.get("opt_end_date", "") if profile else ""
+        opt_end_parsed = _parse_date(opt_end_val) if opt_end_val else None
+        opt_end_obj = st.date_input(
             "OPT End Date",
-            value=profile.get("opt_end_date", "") if profile else "",
+            value=opt_end_parsed,
+            format="YYYY-MM-DD",
         )
+        opt_end_date = _format_date(opt_end_obj)
 
     stem_opt_eligible = st.checkbox(
         "STEM OPT Eligible",
@@ -200,10 +382,14 @@ with tab1:
     )
     stem_opt_end_date = ""
     if stem_opt_eligible:
-        stem_opt_end_date = st.text_input(
+        stem_opt_end_val = profile.get("stem_opt_end_date", "") if profile else ""
+        stem_opt_end_parsed = _parse_date(stem_opt_end_val) if stem_opt_end_val else None
+        stem_opt_end_obj = st.date_input(
             "STEM OPT End Date",
-            value=profile.get("stem_opt_end_date", "") if profile else "",
+            value=stem_opt_end_parsed,
+            format="YYYY-MM-DD",
         )
+        stem_opt_end_date = _format_date(stem_opt_end_obj)
 
     # ── Career Preferences ─────────────────────────────────
     st.subheader("Career Preferences")

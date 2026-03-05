@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 from supabase import create_client, Client
+from typing import Optional
 
 # Load .env from project root (where app.py and .env live)
 _project_root = Path(__file__).resolve().parent.parent
@@ -42,11 +43,104 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = "default_user"
 
 
+def set_user(user_id: str):
+    """Set the active USER_ID used by other helper functions.
+
+    Call this after successful authentication so DB helpers operate on the
+    authenticated user's rows instead of the default_user placeholder.
+    """
+    global USER_ID
+    USER_ID = user_id or "default_user"
+
+
+def auth_sign_up(email: str, password: str) -> dict:
+    """Create a new user with email/password.
+
+    Returns a dict: {user, session, error, needs_confirmation}
+    """
+    try:
+        resp = supabase.auth.sign_up({"email": email, "password": password})
+        print(f"[auth_sign_up] Response: {resp}")
+        
+        # Parse response — Supabase returns an AuthResponse object with .user and .session attrs
+        user = getattr(resp, "user", None) or (resp.get("data", {}).get("user") if isinstance(resp, dict) else None)
+        session = getattr(resp, "session", None) or (resp.get("data", {}).get("session") if isinstance(resp, dict) else None)
+        error = getattr(resp, "error", None) or (resp.get("error") if isinstance(resp, dict) else None)
+        
+        # Email confirmation is needed if session is None but user exists
+        needs_confirmation = user is not None and session is None
+        
+        return {
+            "user": user,
+            "session": session,
+            "error": error,
+            "needs_confirmation": needs_confirmation,
+        }
+    except Exception as e:
+        print(f"[auth_sign_up] Exception: {e}")
+        return {
+            "user": None,
+            "session": None,
+            "error": str(e),
+            "needs_confirmation": False,
+        }
+
+
+def auth_sign_in(email: str, password: str) -> dict:
+    """Sign in an existing user with email/password.
+
+    Returns a dict: {user, session, error, needs_confirmation}
+    """
+    try:
+        # Use the newer sign_in_with_password when available
+        if hasattr(supabase.auth, "sign_in_with_password"):
+            resp = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        else:
+            resp = supabase.auth.sign_in({"email": email, "password": password})
+        
+        print(f"[auth_sign_in] Response: {resp}")
+        
+        # Parse response — Supabase returns an AuthResponse object with .user and .session attrs
+        user = getattr(resp, "user", None) or (resp.get("data", {}).get("user") if isinstance(resp, dict) else None)
+        session = getattr(resp, "session", None) or (resp.get("data", {}).get("session") if isinstance(resp, dict) else None)
+        error = getattr(resp, "error", None) or (resp.get("error") if isinstance(resp, dict) else None)
+        
+        # Email not confirmed yet = can't login
+        needs_confirmation = user is not None and session is None and error is None
+        
+        return {
+            "user": user,
+            "session": session,
+            "error": error,
+            "needs_confirmation": needs_confirmation,
+        }
+    except Exception as e:
+        print(f"[auth_sign_in] Exception: {e}")
+        return {
+            "user": None,
+            "session": None,
+            "error": str(e),
+            "needs_confirmation": False,
+        }
+
+
+def auth_sign_out():
+    """Server-side sign out helper.
+
+    Note: This will clear server-side session cookies for the client SDK.
+    In Streamlit we primarily clear `st.session_state` instead.
+    """
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+
+
 # ═══════════════════════════════════════════════════════════
 # STUDENT PROFILE
 # ═══════════════════════════════════════════════════════════
 
-def get_student_profile() -> dict | None:
+def get_student_profile() -> Optional[dict]:
     """Retrieve the student profile for default_user."""
     try:
         response = (
@@ -135,7 +229,7 @@ def get_all_resumes() -> list:
         return []
 
 
-def get_resume_by_id(resume_id: str) -> dict | None:
+def get_resume_by_id(resume_id: str) -> Optional[dict]:
     """Get a single resume by its ID."""
     try:
         response = (
@@ -373,7 +467,7 @@ def get_immigration_news(limit: int = 6) -> list:
         return []
 
 
-def get_last_news_fetch_time() -> datetime | None:
+def get_last_news_fetch_time() -> Optional[datetime]:
     """Return fetched_at of the most recent row in immigration_news."""
     try:
         response = (
