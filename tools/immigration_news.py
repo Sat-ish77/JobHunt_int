@@ -1,6 +1,7 @@
 """
 Immigration news fetcher — Federal Register API + USCIS/DHS/NAFSA RSS.
 Only official government and recognised organisation sources.
+Filters for F-1 / OPT / STEM / H-1B relevance only.
 """
 
 import asyncio
@@ -25,7 +26,26 @@ OFFICIAL_DOMAINS = [
     "nafsa.org",
 ]
 
-# FIX 4 — fallback URLs for each RSS source
+# ── Relevance filter keywords ──────────────────────────────
+# An article must contain at least one of these in title OR summary
+# to be considered relevant to international students.
+RELEVANCE_KEYWORDS = [
+    "f-1", "f1 visa", "f-1 visa",
+    "opt", "optional practical training",
+    "stem opt", "stem extension",
+    "h-1b", "h1b", "h-1b cap", "specialty occupation",
+    "cpt", "curricular practical training",
+    "international student", "foreign student",
+    "student visa", "nonimmigrant student",
+    "work authorization", "employment authorization",
+    "i-20", "sevis", "cap-gap",
+    "grace period", "post-completion",
+    "nafsa", "designated school official", "dso",
+    "visa rule", "visa policy", "immigration rule",
+    "uscis update", "dhs update",
+]
+
+# RSS fallback URLs
 USCIS_FEEDS = [
     "https://www.uscis.gov/feeds/all-news-and-updates",
     "https://www.uscis.gov/newsroom/news-releases/feed",
@@ -39,16 +59,30 @@ NAFSA_FEEDS = [
     "https://www.nafsa.org/about/about-nafsa/newsroom/rss",
 ]
 
-# FIX 4 — user-agent header to avoid bot-blocking
 RSS_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
+# ── Helpers ────────────────────────────────────────────────
+
 def _is_official_url(url: str) -> bool:
-    """Check if a URL belongs to one of the official domains."""
     if not url:
         return False
     url_lower = url.lower()
     return any(domain in url_lower for domain in OFFICIAL_DOMAINS)
+
+
+def _is_relevant(article: dict) -> bool:
+    """
+    Return True only if the article is relevant to F-1/OPT/H-1B/STEM students.
+    Checks title + summary for any relevance keyword.
+    DHS and Federal Register publish a lot of unrelated content —
+    this filter drops everything that has no student-visa signal.
+    """
+    text = (
+        (article.get("title") or "") + " " +
+        (article.get("summary") or "")
+    ).lower()
+    return any(kw in text for kw in RELEVANCE_KEYWORDS)
 
 
 def _make_news_dict(
@@ -59,7 +93,6 @@ def _make_news_dict(
     category: str = "Policy",
     published_at: str = None,
 ) -> dict:
-    """Create a standardised news article dict."""
     return {
         "title": (title or "")[:120],
         "summary": (summary or "")[:300],
@@ -68,16 +101,13 @@ def _make_news_dict(
         "category": category,
         "is_official": True,
         "published_at": published_at or datetime.now(timezone.utc).isoformat(),
-        "fetched_at": datetime.now(timezone.utc).isoformat(),  # FIX 5
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-# ─────────────────────────────────────────────────────────
-# Federal Register API (async, 4 concurrent keyword searches)
-# ─────────────────────────────────────────────────────────
+# ── Federal Register API ───────────────────────────────────
 
 async def _fetch_fr_keyword(client: httpx.AsyncClient, keyword: str) -> list:
-    """Fetch articles from Federal Register for a single keyword."""
     try:
         resp = await client.get(
             "https://www.federalregister.gov/api/v1/articles",
@@ -89,9 +119,8 @@ async def _fetch_fr_keyword(client: httpx.AsyncClient, keyword: str) -> list:
         )
         resp.raise_for_status()
         data = resp.json()
-        results = data.get("results", [])
         articles = []
-        for r in results:
+        for r in data.get("results", []):
             articles.append(
                 _make_news_dict(
                     title=r.get("title", ""),
@@ -108,147 +137,103 @@ async def _fetch_fr_keyword(client: httpx.AsyncClient, keyword: str) -> list:
 
 
 async def fetch_federal_register() -> list:
-    """Fetch immigration-related articles from the Federal Register API."""
+    # Use highly specific F-1/OPT/H-1B keywords so Federal Register
+    # results are already pre-filtered at the API level.
     keywords = [
-        "F-1 visa international student",
-        "Optional Practical Training OPT",
-        "H-1B specialty occupation cap",
-        "STEM OPT extension",
+        "F-1 visa international student OPT",
+        "Optional Practical Training STEM extension",
+        "H-1B specialty occupation cap rule",
+        "SEVIS student visa nonimmigrant",
     ]
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            tasks = [_fetch_fr_keyword(client, kw) for kw in keywords]
-            batches = await asyncio.gather(*tasks, return_exceptions=True)
-
-        articles = []
-        seen_urls = set()
+            batches = await asyncio.gather(
+                *[_fetch_fr_keyword(client, kw) for kw in keywords],
+                return_exceptions=True,
+            )
+        articles, seen = [], set()
         for batch in batches:
             if isinstance(batch, list):
-                for article in batch:
-                    if article["url"] and article["url"] not in seen_urls:
-                        seen_urls.add(article["url"])
-                        articles.append(article)
+                for a in batch:
+                    if a["url"] and a["url"] not in seen:
+                        seen.add(a["url"])
+                        articles.append(a)
         return articles
     except Exception as e:
         print(f"[fetch_federal_register] Error: {e}")
         return []
 
 
-# ─────────────────────────────────────────────────────────
-# RSS feeds (synchronous via feedparser)
-# ─────────────────────────────────────────────────────────
+# ── RSS feeds ──────────────────────────────────────────────
 
-def fetch_uscis_rss() -> list:
-    """Fetch latest entries from USCIS RSS — tries primary then fallback URL."""
-    for url in USCIS_FEEDS:                                          # FIX 4
+def _parse_rss(feed_urls: list, source: str) -> list:
+    """Try each URL in feed_urls until one returns entries."""
+    for url in feed_urls:
         try:
             feed = feedparser.parse(url, request_headers=RSS_HEADERS)
             if not feed.entries:
                 continue
             articles = []
-            for entry in feed.entries[:5]:
+            for entry in feed.entries[:10]:  # fetch more, filter later
                 articles.append(
                     _make_news_dict(
                         title=entry.get("title", ""),
                         summary=entry.get("summary", ""),
                         url=entry.get("link", ""),
-                        source="USCIS",
+                        source=source,
                         published_at=entry.get("published", ""),
                     )
                 )
             return articles
         except Exception as e:
-            print(f"[fetch_uscis_rss] Error for {url}: {e}")
+            print(f"[_parse_rss] Error for {url}: {e}")
             continue
     return []
+
+
+def fetch_uscis_rss() -> list:
+    return _parse_rss(USCIS_FEEDS, "USCIS")
 
 
 def fetch_dhs_rss() -> list:
-    """Fetch latest entries from DHS RSS — tries primary then fallback URL."""
-    for url in DHS_FEEDS:                                            # FIX 4
-        try:
-            feed = feedparser.parse(url, request_headers=RSS_HEADERS)
-            if not feed.entries:
-                continue
-            articles = []
-            for entry in feed.entries[:5]:
-                articles.append(
-                    _make_news_dict(
-                        title=entry.get("title", ""),
-                        summary=entry.get("summary", ""),
-                        url=entry.get("link", ""),
-                        source="DHS",
-                        published_at=entry.get("published", ""),
-                    )
-                )
-            return articles
-        except Exception as e:
-            print(f"[fetch_dhs_rss] Error for {url}: {e}")
-            continue
-    return []
+    # DHS publishes everything — coast guard, drug codes, personnel.
+    # We fetch more entries and rely on _is_relevant() to filter.
+    return _parse_rss(DHS_FEEDS, "DHS")
 
 
 def fetch_nafsa_rss() -> list:
-    """Fetch latest entries from NAFSA RSS — tries primary then fallback URL."""
-    for url in NAFSA_FEEDS:                                          # FIX 4
-        try:
-            feed = feedparser.parse(url, request_headers=RSS_HEADERS)
-            if not feed.entries:
-                continue
-            articles = []
-            for entry in feed.entries[:5]:
-                articles.append(
-                    _make_news_dict(
-                        title=entry.get("title", ""),
-                        summary=entry.get("summary", ""),
-                        url=entry.get("link", ""),
-                        source="NAFSA",
-                        published_at=entry.get("published", ""),
-                    )
-                )
-            return articles
-        except Exception as e:
-            print(f"[fetch_nafsa_rss] Error for {url}: {e}")
-            continue
-    return []
+    return _parse_rss(NAFSA_FEEDS, "NAFSA")
 
 
-# ─────────────────────────────────────────────────────────
-# Category detection
-# ─────────────────────────────────────────────────────────
+# ── Category detection ─────────────────────────────────────
 
 def detect_category(title: str) -> str:
-    """Detect news category from the article title."""
-    try:
-        t = (title or "").lower()
-        if "opt" in t or "practical training" in t:
-            return "OPT"
-        if "h-1b" in t or "h1b" in t:
-            return "H1B"
-        if "f-1" in t or "f1" in t or "student visa" in t:
-            return "F-1"
-        if "stem" in t:
-            return "STEM OPT"
-        return "Policy"
-    except Exception:
-        return "Policy"
+    t = (title or "").lower()
+    if "stem" in t:
+        return "STEM OPT"
+    if "opt" in t or "practical training" in t:
+        return "OPT"
+    if "h-1b" in t or "h1b" in t:
+        return "H1B"
+    if "f-1" in t or "f1" in t or "student visa" in t or "sevis" in t:
+        return "F-1"
+    if "cpt" in t or "curricular" in t:
+        return "CPT"
+    return "Policy"
 
 
-# ─────────────────────────────────────────────────────────
-# Main aggregator
-# ─────────────────────────────────────────────────────────
+# ── Main aggregator ────────────────────────────────────────
 
 def get_all_immigration_news() -> list:
     """
-    Return immigration news from cache if fresh (< 6 hours),
-    otherwise fetch from all sources, filter, save, and return.
+    Return immigration news relevant to F-1/OPT/H-1B students.
+    Uses 6-hour Supabase cache to avoid hammering RSS feeds.
     """
     try:
         last_fetch = get_last_news_fetch_time()
         now = datetime.now(timezone.utc)
 
         if last_fetch:
-            # Make last_fetch timezone-aware if it isn't
             if last_fetch.tzinfo is None:
                 last_fetch = last_fetch.replace(tzinfo=timezone.utc)
             if (now - last_fetch) < timedelta(hours=6):
@@ -257,7 +242,6 @@ def get_all_immigration_news() -> list:
                     return cached
 
         # Fetch from all sources
-        # Federal Register is async; RSS feeds are sync
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -271,43 +255,50 @@ def get_all_immigration_news() -> list:
         except RuntimeError:
             fr_articles = asyncio.run(fetch_federal_register())
 
-        uscis_articles = fetch_uscis_rss()
-        dhs_articles = fetch_dhs_rss()
-        nafsa_articles = fetch_nafsa_rss()
+        all_articles = (
+            fr_articles
+            + fetch_uscis_rss()
+            + fetch_dhs_rss()
+            + fetch_nafsa_rss()
+        )
 
-        all_articles = fr_articles + uscis_articles + dhs_articles + nafsa_articles
+        # Step 1: Official domain filter
+        official = [a for a in all_articles if _is_official_url(a.get("url", ""))]
 
-        # Filter: only keep items whose URL contains an official domain
-        filtered = [a for a in all_articles if _is_official_url(a.get("url", ""))]
+        # Step 2: Relevance filter — F-1/OPT/H-1B/STEM signal required
+        relevant = [a for a in official if _is_relevant(a)]
 
-        # Deduplicate by URL
-        seen_urls = set()
-        unique = []
-        for article in filtered:
+        # Step 3: Deduplicate by URL
+        seen, unique = set(), []
+        for article in relevant:
             url = article.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
+            if url and url not in seen:
+                seen.add(url)
                 article["category"] = detect_category(article.get("title", ""))
                 unique.append(article)
 
-        # Sort by published_at desc
-        unique.sort(
-            key=lambda x: x.get("published_at", ""),
-            reverse=True,
-        )
+        # Step 4: Sort newest first
+        unique.sort(key=lambda x: x.get("published_at", ""), reverse=True)
 
-        # FIX 3 — save failure no longer blocks returning freshly fetched articles
+        # Step 5: Cache to Supabase (non-blocking on failure)
         if unique:
             try:
                 save_immigration_news(unique)
             except Exception as e:
-                print(f"[get_all_immigration_news] Cache save failed (RLS?): {e}")
+                print(f"[get_all_immigration_news] Cache save failed: {e}")
+
+        # Fallback: if nothing relevant found, return cached
+        if not unique:
+            print("[get_all_immigration_news] No relevant articles found, using cache.")
+            try:
+                return get_immigration_news(limit=8)
+            except Exception:
+                return []
 
         return unique[:8]
 
     except Exception as e:
         print(f"[get_all_immigration_news] Error: {e}")
-        # Fall back to cached data
         try:
             return get_immigration_news(limit=8)
         except Exception:
