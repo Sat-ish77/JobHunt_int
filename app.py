@@ -5,6 +5,7 @@ A job hunting web app for international students on F-1/OPT visas.
 
 import re
 import streamlit as st
+import pycountry
 
 st.set_page_config(
     page_title="JobHunt Int",
@@ -45,7 +46,9 @@ def _strip_html(text: str) -> str:
     """Remove HTML tags from text (some RSS feeds return raw HTML)."""
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
+COUNTRIES = sorted([country.name for country in pycountry.countries])
 def _safe_date(value, default=None):
+
     """Convert saved string/ISO date into a Python date for Streamlit date_input."""
     if default is None:
         default = date.today()
@@ -57,6 +60,8 @@ def _safe_date(value, default=None):
         return datetime.fromisoformat(str(value)).date()
     except Exception:
         return default
+    
+
     """Remove HTML tags from text (some RSS feeds return raw HTML)."""
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
@@ -196,10 +201,14 @@ with tab1:
                 ),
             )
         with col_v2:
-            country_of_origin = st.text_input(
-                "Country of Origin",
-                value=profile.get("country_of_origin", ""),
-            )
+            saved_country = profile.get("country_of_origin", "United States")
+
+            country_of_origin = st.selectbox(
+            "Country of Origin",
+        COUNTRIES,
+        index=COUNTRIES.index(saved_country) if saved_country in COUNTRIES else COUNTRIES.index("United States"),
+        )
+            
 
         col_v3, col_v4 = st.columns(2)
         with col_v3:
