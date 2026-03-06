@@ -5,6 +5,7 @@ A job hunting web app for international students on F-1/OPT visas.
 
 import re
 import streamlit as st
+from datetime import datetime, date
 
 st.set_page_config(
     page_title="JobHunt Int",
@@ -14,6 +15,11 @@ st.set_page_config(
 
 # ── Imports ────────────────────────────────────────────────
 from database.supabase_client import (
+    auth_sign_in,
+    auth_sign_up,
+    auth_sign_out,
+    set_user,
+    set_session,
     clear_conversation_history,
     get_all_jobs,
     get_all_resumes,
@@ -43,9 +49,168 @@ def _strip_html(text: str) -> str:
     """Remove HTML tags from text (some RSS feeds return raw HTML)."""
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
+
+def _parse_date(date_str: str) -> date:
+    """Parse date string to date object. Returns None if invalid."""
+    if not date_str:
+        return None
+    try:
+        for fmt in ["%Y-%m-%d", "%B %Y", "%B %d, %Y", "%m/%d/%Y"]:
+            try:
+                return datetime.strptime(date_str, fmt).date()
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
+
+
+def _format_date(d) -> str:
+    """Convert date object to string format."""
+    if d is None:
+        return ""
+    if isinstance(d, str):
+        return d
+    return d.strftime("%Y-%m-%d")
+
+
 # ── Session state init ─────────────────────────────────────
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+if "session" not in st.session_state:
+    st.session_state["session"] = None
+if "user_email" not in st.session_state:
+    st.session_state["user_email"] = None
 if "active_resume_id" not in st.session_state:
     st.session_state["active_resume_id"] = None
+
+
+# ── Authentication Page ────────────────────────────────────
+def show_login_page():
+    """Display login/signup page for unauthenticated users."""
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image("https://cdn-icons-png.flaticon.com/512/163/163801.png", width=80)
+        st.title("🌐 JobHunt Int")
+        st.caption("Job Search Assistant for International Students")
+        
+        tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
+        
+        # ── LOGIN TAB ──
+        with tab_login:
+            st.subheader("Welcome Back!")
+            login_email = st.text_input(
+                "Email", 
+                placeholder="your@email.com",
+                key="login_email"
+            )
+            login_password = st.text_input(
+                "Password",
+                type="password",
+                key="login_password"
+            )
+            
+            if st.button("🔓 Sign In", use_container_width=True):
+                if not login_email or not login_password:
+                    st.error("Please enter email and password.")
+                else:
+                    with st.spinner("Signing in..."):
+                        result = auth_sign_in(login_email, login_password)
+                        if result.get("needs_confirmation"):
+                            st.warning(
+                                f"📧 Your email ({login_email}) hasn't been confirmed yet. "
+                                f"Check your inbox for a confirmation link and verify your email, then try logging in again."
+                            )
+                        elif result["error"]:
+                            st.error(f"Login failed: {result['error']}")
+                        elif result["user"] and result["session"]:
+                            st.session_state["user"] = result["user"]
+                            st.session_state["session"] = result["session"]
+                            st.session_state["user_email"] = login_email
+                            user_id = result["user"].id if hasattr(result["user"], "id") else login_email
+                            set_user(user_id)
+                            # ── SET SESSION so RLS auth.uid() works ──
+                            set_session(
+                                result["session"].access_token,
+                                result["session"].refresh_token,
+                            )
+                            st.success("✅ Signed in! Refreshing...")
+                            st.rerun()
+                        else:
+                            st.error("Sign in failed. Please check your email and password.")
+        
+        # ── SIGNUP TAB ──
+        with tab_signup:
+            st.subheader("Create Your Account")
+            signup_email = st.text_input(
+                "Email",
+                placeholder="your@email.com",
+                key="signup_email"
+            )
+            signup_password = st.text_input(
+                "Password (min 6 characters)",
+                type="password",
+                key="signup_password"
+            )
+            signup_password_confirm = st.text_input(
+                "Confirm Password",
+                type="password",
+                key="signup_password_confirm"
+            )
+            
+            if st.button("✍️ Create Account", use_container_width=True):
+                if not signup_email:
+                    st.error("Please enter an email.")
+                elif signup_password != signup_password_confirm:
+                    st.error("Passwords do not match.")
+                elif len(signup_password) < 6:
+                    st.error("Password must be at least 6 characters.")
+                else:
+                    with st.spinner("Creating account..."):
+                        result = auth_sign_up(signup_email, signup_password)
+                        if result.get("needs_confirmation"):
+                            st.success(
+                                f"✅ Account created! Check your email ({signup_email}) for a confirmation link. "
+                                f"Click the link to verify your email, then you can log in."
+                            )
+                        elif result["error"]:
+                            st.error(f"Sign up failed: {result['error']}")
+                        elif result["user"]:
+                            if result["session"]:
+                                st.success("✅ Account created and signed in! Redirecting...")
+                                st.session_state["user"] = result["user"]
+                                st.session_state["session"] = result["session"]
+                                st.session_state["user_email"] = signup_email
+                                user_id = result["user"].id if hasattr(result["user"], "id") else signup_email
+                                set_user(user_id)
+                                # ── SET SESSION so RLS auth.uid() works ──
+                                set_session(
+                                    result["session"].access_token,
+                                    result["session"].refresh_token,
+                                )
+                                st.rerun()
+                            else:
+                                st.success(
+                                    f"✅ Account created! Check your email ({signup_email}) for a confirmation link, "
+                                    f"then log in on the Login tab."
+                                )
+                        else:
+                            st.error("Sign up failed. Please try again.")
+        
+        st.divider()
+        st.caption(
+            "🔒 All data is secured with Supabase authentication. "
+            "For immigration decisions, consult your DSO or a licensed immigration attorney."
+        )
+
+
+if st.session_state["user"] is None:
+    show_login_page()
+    st.stop()
+
+# ════════════════════════════════════════════════════════════
+# USER LOGGED IN — Show main app below
+# ════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════
 # SIDEBAR — visible on every tab
@@ -53,6 +218,19 @@ if "active_resume_id" not in st.session_state:
 
 st.sidebar.title("🌐 JobHunt Int")
 st.sidebar.caption("Built for International Students")
+
+if st.sidebar.button("🚪 Sign Out", use_container_width=True):
+    auth_sign_out()
+    st.session_state["user"] = None
+    st.session_state["session"] = None
+    st.session_state["user_email"] = None
+    st.session_state["active_resume_id"] = None
+    st.success("Signed out! Redirecting...")
+    st.rerun()
+
+st.sidebar.divider()
+st.sidebar.caption(f"👤 Logged in as: {st.session_state.get('user_email', 'Unknown')}")
+st.sidebar.divider()
 
 st.sidebar.warning(
     "⚠️ For immigration decisions, always consult your DSO "
@@ -109,7 +287,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     profile = get_student_profile()
 
-    # ── Personal Information ───────────────────────────────
     st.subheader("Personal Information")
     col_p1, col_p2 = st.columns(2)
     with col_p1:
@@ -125,7 +302,6 @@ with tab1:
             placeholder="sat@gmail.com",
         )
 
-    # ── Academic Information ───────────────────────────────
     st.subheader("Academic Information")
     col_a1, col_a2 = st.columns(2)
     with col_a1:
@@ -151,18 +327,20 @@ with tab1:
             ),
         )
     with col_a4:
-        graduation_date = st.text_input(
+        grad_date_val = profile.get("graduation_date", "") if profile else ""
+        grad_date_parsed = _parse_date(grad_date_val) if grad_date_val else None
+        graduation_date_obj = st.date_input(
             "Graduation Date",
-            value=profile.get("graduation_date", "") if profile else "",
-            placeholder="December 2026",
+            value=grad_date_parsed,
+            format="YYYY-MM-DD",
         )
+        graduation_date = _format_date(graduation_date_obj)
     with col_a5:
         gpa = st.text_input(
             "GPA",
             value=profile.get("gpa", "") if profile else "",
         )
 
-    # ── Visa & Immigration ─────────────────────────────────
     st.subheader("Visa & Immigration")
     col_v1, col_v2 = st.columns(2)
     with col_v1:
@@ -184,15 +362,23 @@ with tab1:
 
     col_v3, col_v4 = st.columns(2)
     with col_v3:
-        opt_start_date = st.text_input(
+        opt_start_val = profile.get("opt_start_date", "") if profile else ""
+        opt_start_parsed = _parse_date(opt_start_val) if opt_start_val else None
+        opt_start_obj = st.date_input(
             "OPT Start Date",
-            value=profile.get("opt_start_date", "") if profile else "",
+            value=opt_start_parsed,
+            format="YYYY-MM-DD",
         )
+        opt_start_date = _format_date(opt_start_obj)
     with col_v4:
-        opt_end_date = st.text_input(
+        opt_end_val = profile.get("opt_end_date", "") if profile else ""
+        opt_end_parsed = _parse_date(opt_end_val) if opt_end_val else None
+        opt_end_obj = st.date_input(
             "OPT End Date",
-            value=profile.get("opt_end_date", "") if profile else "",
+            value=opt_end_parsed,
+            format="YYYY-MM-DD",
         )
+        opt_end_date = _format_date(opt_end_obj)
 
     stem_opt_eligible = st.checkbox(
         "STEM OPT Eligible",
@@ -200,12 +386,15 @@ with tab1:
     )
     stem_opt_end_date = ""
     if stem_opt_eligible:
-        stem_opt_end_date = st.text_input(
+        stem_opt_end_val = profile.get("stem_opt_end_date", "") if profile else ""
+        stem_opt_end_parsed = _parse_date(stem_opt_end_val) if stem_opt_end_val else None
+        stem_opt_end_obj = st.date_input(
             "STEM OPT End Date",
-            value=profile.get("stem_opt_end_date", "") if profile else "",
+            value=stem_opt_end_parsed,
+            format="YYYY-MM-DD",
         )
+        stem_opt_end_date = _format_date(stem_opt_end_obj)
 
-    # ── Career Preferences ─────────────────────────────────
     st.subheader("Career Preferences")
     target_roles_str = st.text_input(
         "Target Roles",
@@ -240,15 +429,11 @@ with tab1:
 
     if st.button("💾 Save Profile"):
         with st.spinner("Saving profile..."):
-            target_roles = [
-                r.strip() for r in target_roles_str.split(",") if r.strip()
-            ]
-            target_locations = [
-                l.strip() for l in target_locations_str.split(",") if l.strip()
-            ]
+            target_roles = [r.strip() for r in target_roles_str.split(",") if r.strip()]
+            target_locations = [l.strip() for l in target_locations_str.split(",") if l.strip()]
             profile_data = {
-                "name": name,                           # NEW
-                "email": email,                         # NEW
+                "name": name,
+                "email": email,
                 "university": university,
                 "major": major,
                 "degree_level": degree_level,
@@ -311,18 +496,14 @@ with tab2:
 
         active_index = 0
         if st.session_state.get("active_resume_id") in resume_ids:
-            active_index = resume_ids.index(
-                st.session_state["active_resume_id"]
-            )
+            active_index = resume_ids.index(st.session_state["active_resume_id"])
 
         selected = st.radio(
             "Active resume for job matching and applications:",
             resume_names,
             index=active_index,
         )
-        st.session_state["active_resume_id"] = resume_ids[
-            resume_names.index(selected)
-        ]
+        st.session_state["active_resume_id"] = resume_ids[resume_names.index(selected)]
 
         st.divider()
         st.subheader("Manage Resumes")
@@ -337,9 +518,7 @@ with tab2:
                 )
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button(
-                        "💾 Save Changes", key=f"save_{resume['id']}"
-                    ):
+                    if st.button("💾 Save Changes", key=f"save_{resume['id']}"):
                         with st.spinner("Saving..."):
                             try:
                                 update_resume_content(resume["id"], edited)
@@ -350,14 +529,78 @@ with tab2:
                     if st.button("🗑️ Delete", key=f"del_{resume['id']}"):
                         try:
                             delete_resume(resume["id"])
-                            if (
-                                st.session_state.get("active_resume_id")
-                                == resume["id"]
-                            ):
+                            if st.session_state.get("active_resume_id") == resume["id"]:
                                 st.session_state["active_resume_id"] = None
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
+
+        # ── Resume Health Check ────────────────────────────
+        st.divider()
+        st.subheader("🔍 Resume Health Check")
+        st.caption("Formatting analysis + AI content review")
+
+        from utils.resume_checker import full_resume_check
+
+        checker_resume = st.selectbox(
+            "Select resume to check",
+            [r["name"] for r in resumes],
+            key="checker_resume_select",
+        )
+        checker_matched = next((r for r in resumes if r["name"] == checker_resume), None)
+
+        target_role_input = st.text_input(
+            "Target role (optional)",
+            placeholder="Data Engineer, ML Engineer, Construction Manager...",
+            key="checker_target_role",
+        )
+
+        col_check1, col_check2 = st.columns(2)
+        with col_check1:
+            run_check = st.button("🔍 Run Check", key="run_resume_check")
+        with col_check2:
+            use_ai = st.toggle("Include AI review (~$0.001)", value=True, key="use_ai_check")
+
+        if run_check and checker_matched:
+            with st.spinner("Analyzing resume..."):
+                result = full_resume_check(
+                    resume_text=checker_matched["content"],
+                    target_role=target_role_input,
+                    use_gpt=use_ai,
+                )
+
+            score = result["score"]
+            badge = "🟢" if score >= 80 else "🟡" if score >= 60 else "🔴"
+
+            col_s1, col_s2, col_s3 = st.columns(3)
+            with col_s1:
+                st.metric("Resume Health Score", f"{badge} {score}/100")
+            with col_s2:
+                st.metric("Word Count", result["word_count"])
+            with col_s3:
+                st.metric("Issues Found", len(result["issues"]))
+
+            st.divider()
+
+            if result["issues"]:
+                st.subheader("❌ Must Fix")
+                for issue in result["issues"]:
+                    st.markdown(issue)
+
+            if result["warnings"]:
+                st.subheader("⚠️ Should Fix")
+                for warning in result["warnings"]:
+                    st.markdown(warning)
+
+            if result["suggestions"]:
+                st.subheader("💡 Quick Wins")
+                for suggestion in result["suggestions"]:
+                    st.markdown(suggestion)
+
+            if result.get("gpt_review"):
+                st.divider()
+                st.subheader("🤖 AI Deep Review")
+                st.markdown(result["gpt_review"])
 
 # ════════════════════════════════════════════════════════════
 # TAB 3 — Job Search
@@ -396,19 +639,13 @@ with tab3:
         include_remote = st.toggle("Include Remote Jobs", value=True)
 
     if st.button("🔍 Search All Jobs", disabled=not role):
-        with st.spinner(
-            f"Searching all job boards for {role} in {location}..."
-        ):
+        with st.spinner(f"Searching all job boards for {role} in {location}..."):
             jobs = search_all_jobs(role, location)
 
             if h1b_only:
                 jobs = [j for j in jobs if j.get("h1b_sponsor_history")]
             if not include_remote:
-                jobs = [
-                    j
-                    for j in jobs
-                    if "remote" not in j.get("location", "").lower()
-                ]
+                jobs = [j for j in jobs if "remote" not in j.get("location", "").lower()]
 
             if jobs:
                 try:
@@ -419,27 +656,31 @@ with tab3:
             else:
                 st.warning("No jobs found. Try broader role or location.")
 
-    # Display saved jobs
     jobs = get_all_jobs()
 
     active_resume = None
     if st.session_state.get("active_resume_id"):
-        active_resume = get_resume_by_id(
-            st.session_state["active_resume_id"]
-        )
+        active_resume = get_resume_by_id(st.session_state["active_resume_id"])
 
     if jobs:
         if active_resume:
             for job in jobs:
                 if job.get("description"):
                     ats = score_resume_against_job(
-                        active_resume["content"], job["description"]
+                        active_resume["content"],
+                        job["description"],
+                        job_title=job.get("title", ""),
+                        use_gpt=False,  # fast mode for bulk scoring
                     )
                     job["ats_score"] = ats["score"]
                     job["missing_keywords"] = ats["important_missing"]
+                    job["rule_tips"] = ats.get("rule_tips", [])
+                    job["ats_summary"] = ats.get("summary", "")
                 else:
                     job["ats_score"] = 0
                     job["missing_keywords"] = []
+                    job["rule_tips"] = []
+                    job["ats_summary"] = ""
             jobs.sort(key=lambda x: x.get("ats_score", 0), reverse=True)
 
         st.metric("Jobs Found", len(jobs))
@@ -457,20 +698,12 @@ with tab3:
 
                 with col1:
                     score = job.get("ats_score", 0)
-                    if score > 70:
-                        color = "🟢"
-                    elif score >= 40:
-                        color = "🟡"
-                    else:
-                        color = "🔴"
+                    color = "🟢" if score > 70 else "🟡" if score >= 40 else "🔴"
                     st.metric("ATS Match", f"{color} {score}%")
 
                 with col2:
                     if job.get("h1b_sponsor_history"):
-                        st.success(
-                            f"✅ H1B Verified "
-                            f"({job.get('h1b_approvals_count', 0)} approvals)"
-                        )
+                        st.success(f"✅ H1B Verified ({job.get('h1b_approvals_count', 0)} approvals)")
                     else:
                         st.caption("⚪ No H1B history found")
 
@@ -482,33 +715,32 @@ with tab3:
 
                 missing = job.get("missing_keywords", [])
                 if missing:
-                    st.caption(
-                        f"Resume missing: {', '.join(missing[:8])}"
-                    )
+                    st.caption(f"Resume missing: {', '.join(missing[:8])}")
+
+                # ATS improvement tips
+                tips = job.get("rule_tips", [])
+                if tips:
+                    with st.expander("💡 How to improve your match"):
+                        for tip in tips:
+                            st.markdown(tip)
 
                 col3, col4 = st.columns(2)
                 with col3:
                     if job.get("url"):
                         st.link_button("🔗 View Job", job["url"])
                 with col4:
-                    if st.button(
-                        "✍️ Generate Application",
-                        key=f"gen_{job['id']}",
-                    ):
+                    if st.button("✍️ Generate Application", key=f"gen_{job['id']}"):
                         if not active_resume:
-                            st.error(
-                                "Go to Resumes tab and select an "
-                                "active resume first."
-                            )
+                            st.error("Go to Resumes tab and select an active resume first.")
                         else:
-                            with st.spinner(
-                                "Writing cover letter and optimizing resume..."
-                            ):
+                            with st.spinner("Writing cover letter and optimizing resume..."):
                                 try:
                                     profile = get_student_profile()
                                     ats = score_resume_against_job(
                                         active_resume["content"],
                                         job.get("description", ""),
+                                        job_title=job.get("title", ""),
+                                        use_gpt=True,  # full analysis for application generation
                                     )
                                     cover_letter = generate_cover_letter(
                                         resume=active_resume["content"],
@@ -529,10 +761,7 @@ with tab3:
                                         cover_letter,
                                         rewritten,
                                     )
-                                    st.success(
-                                        "✅ Application saved! "
-                                        "Check Applications tab."
-                                    )
+                                    st.success("✅ Application saved! Check Applications tab.")
                                 except Exception as e:
                                     st.error(f"Error generating application: {e}")
 
@@ -564,17 +793,11 @@ with tab4:
             }
             icon = STATUS_ICON.get(status, "📝")
 
-            with st.expander(
-                f"{icon} {title} — {company} | {status.upper()}"
-            ):
+            with st.expander(f"{icon} {title} — {company} | {status.upper()}"):
                 new_status = st.selectbox(
                     "Status",
                     STATUS_OPTIONS,
-                    index=(
-                        STATUS_OPTIONS.index(status)
-                        if status in STATUS_OPTIONS
-                        else 0
-                    ),
+                    index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
                     key=f"status_{app['id']}",
                 )
                 if new_status != status:
@@ -632,10 +855,7 @@ with tab5:
             key="coach_resume_select",
         )
         if selected_resume != "None":
-            matched = next(
-                (r for r in resumes if r["name"] == selected_resume),
-                None,
-            )
+            matched = next((r for r in resumes if r["name"] == selected_resume), None)
             if matched:
                 coach_resume_context = matched["content"]
 

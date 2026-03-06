@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 from supabase import create_client, Client
+from typing import Optional
 
 # Load .env from project root (where app.py and .env live)
 _project_root = Path(__file__).resolve().parent.parent
@@ -42,12 +43,103 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = "default_user"
 
 
+def set_user(user_id: str):
+    """Set the active USER_ID used by other helper functions."""
+    global USER_ID
+    USER_ID = user_id or "default_user"
+
+
+def set_session(access_token: str, refresh_token: str):
+    """
+    Set the authenticated session on the Supabase client.
+    Must be called after login so RLS auth.uid() returns the correct user.
+    Without this, all RLS policies that check auth.uid() will fail.
+    """
+    try:
+        supabase.auth.set_session(access_token, refresh_token)
+    except Exception as e:
+        print(f"[set_session] Error: {e}")
+
+
+def auth_sign_up(email: str, password: str) -> dict:
+    """Create a new user with email/password.
+
+    Returns a dict: {user, session, error, needs_confirmation}
+    """
+    try:
+        resp = supabase.auth.sign_up({"email": email, "password": password})
+        print(f"[auth_sign_up] Response: {resp}")
+        
+        user = getattr(resp, "user", None) or (resp.get("data", {}).get("user") if isinstance(resp, dict) else None)
+        session = getattr(resp, "session", None) or (resp.get("data", {}).get("session") if isinstance(resp, dict) else None)
+        error = getattr(resp, "error", None) or (resp.get("error") if isinstance(resp, dict) else None)
+        
+        needs_confirmation = user is not None and session is None
+        
+        return {
+            "user": user,
+            "session": session,
+            "error": error,
+            "needs_confirmation": needs_confirmation,
+        }
+    except Exception as e:
+        print(f"[auth_sign_up] Exception: {e}")
+        return {
+            "user": None,
+            "session": None,
+            "error": str(e),
+            "needs_confirmation": False,
+        }
+
+
+def auth_sign_in(email: str, password: str) -> dict:
+    """Sign in an existing user with email/password.
+
+    Returns a dict: {user, session, error, needs_confirmation}
+    """
+    try:
+        if hasattr(supabase.auth, "sign_in_with_password"):
+            resp = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        else:
+            resp = supabase.auth.sign_in({"email": email, "password": password})
+        
+        print(f"[auth_sign_in] Response: {resp}")
+        
+        user = getattr(resp, "user", None) or (resp.get("data", {}).get("user") if isinstance(resp, dict) else None)
+        session = getattr(resp, "session", None) or (resp.get("data", {}).get("session") if isinstance(resp, dict) else None)
+        error = getattr(resp, "error", None) or (resp.get("error") if isinstance(resp, dict) else None)
+        
+        needs_confirmation = user is not None and session is None and error is None
+        
+        return {
+            "user": user,
+            "session": session,
+            "error": error,
+            "needs_confirmation": needs_confirmation,
+        }
+    except Exception as e:
+        print(f"[auth_sign_in] Exception: {e}")
+        return {
+            "user": None,
+            "session": None,
+            "error": str(e),
+            "needs_confirmation": False,
+        }
+
+
+def auth_sign_out():
+    """Sign out and clear the session."""
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+
+
 # ═══════════════════════════════════════════════════════════
 # STUDENT PROFILE
 # ═══════════════════════════════════════════════════════════
 
-def get_student_profile() -> dict | None:
-    """Retrieve the student profile for default_user."""
+def get_student_profile() -> Optional[dict]:
     try:
         response = (
             supabase.table("student_profile")
@@ -65,7 +157,6 @@ def get_student_profile() -> dict | None:
 
 
 def save_student_profile(data: dict) -> dict:
-    """Upsert (insert or update) the student profile for default_user."""
     try:
         data["user_id"] = USER_ID
         data["updated_at"] = datetime.utcnow().isoformat()
@@ -81,7 +172,6 @@ def save_student_profile(data: dict) -> dict:
 
 
 def update_student_profile(updates: dict) -> dict:
-    """Update specific fields on the existing student profile."""
     try:
         updates["updated_at"] = datetime.utcnow().isoformat()
         response = (
@@ -101,7 +191,6 @@ def update_student_profile(updates: dict) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def save_resume(name: str, content: str, embedding: list) -> dict:
-    """Save a new resume with its embedding vector."""
     try:
         response = (
             supabase.table("resumes")
@@ -120,7 +209,6 @@ def save_resume(name: str, content: str, embedding: list) -> dict:
 
 
 def get_all_resumes() -> list:
-    """Get all resumes for default_user ordered by created_at desc."""
     try:
         response = (
             supabase.table("resumes")
@@ -135,8 +223,7 @@ def get_all_resumes() -> list:
         return []
 
 
-def get_resume_by_id(resume_id: str) -> dict | None:
-    """Get a single resume by its ID."""
+def get_resume_by_id(resume_id: str) -> Optional[dict]:
     try:
         response = (
             supabase.table("resumes")
@@ -154,7 +241,6 @@ def get_resume_by_id(resume_id: str) -> dict | None:
 
 
 def update_resume_content(resume_id: str, content: str) -> dict:
-    """Update the text content of a resume."""
     try:
         response = (
             supabase.table("resumes")
@@ -172,7 +258,6 @@ def update_resume_content(resume_id: str, content: str) -> dict:
 
 
 def delete_resume(resume_id: str):
-    """Delete a resume by its ID."""
     try:
         supabase.table("resumes").delete().eq("id", resume_id).execute()
     except Exception as e:
@@ -185,7 +270,6 @@ def delete_resume(resume_id: str):
 # ═══════════════════════════════════════════════════════════
 
 def save_jobs(jobs: list) -> list:
-    """Upsert jobs on the url column, ignoring conflicts."""
     try:
         if not jobs:
             return []
@@ -201,7 +285,6 @@ def save_jobs(jobs: list) -> list:
 
 
 def get_all_jobs() -> list:
-    """Get all jobs ordered by fetched_at desc."""
     try:
         response = (
             supabase.table("jobs")
@@ -216,7 +299,6 @@ def get_all_jobs() -> list:
 
 
 def get_sponsored_jobs() -> list:
-    """Get jobs where h1b_sponsor_history is true."""
     try:
         response = (
             supabase.table("jobs")
@@ -237,7 +319,6 @@ def get_sponsored_jobs() -> list:
 
 def save_application(job_id: str, resume_id: str,
                      cover_letter: str, rewritten_resume: str) -> dict:
-    """Create a new application draft."""
     try:
         response = (
             supabase.table("applications")
@@ -258,7 +339,6 @@ def save_application(job_id: str, resume_id: str,
 
 
 def get_applications() -> list:
-    """Get all applications with joined job and resume data."""
     try:
         response = (
             supabase.table("applications")
@@ -274,7 +354,6 @@ def get_applications() -> list:
 
 
 def update_application_status(app_id: str, status: str):
-    """Update the status of an application."""
     try:
         supabase.table("applications").update(
             {"status": status}
@@ -285,7 +364,6 @@ def update_application_status(app_id: str, status: str):
 
 
 def update_cover_letter(app_id: str, cover_letter: str):
-    """Update the cover letter of an application."""
     try:
         supabase.table("applications").update(
             {"cover_letter": cover_letter}
@@ -300,7 +378,6 @@ def update_cover_letter(app_id: str, cover_letter: str):
 # ═══════════════════════════════════════════════════════════
 
 def save_message(role: str, content: str):
-    """Save a chat message to the conversations table."""
     try:
         supabase.table("conversations").insert({
             "user_id": USER_ID,
@@ -313,7 +390,6 @@ def save_message(role: str, content: str):
 
 
 def get_conversation_history(limit: int = 30) -> list:
-    """Get conversation history ordered by created_at ascending."""
     try:
         response = (
             supabase.table("conversations")
@@ -330,7 +406,6 @@ def get_conversation_history(limit: int = 30) -> list:
 
 
 def clear_conversation_history():
-    """Delete all conversation history for default_user."""
     try:
         supabase.table("conversations").delete().eq(
             "user_id", USER_ID
@@ -345,7 +420,6 @@ def clear_conversation_history():
 # ═══════════════════════════════════════════════════════════
 
 def save_immigration_news(articles: list):
-    """Upsert immigration news articles on the url column."""
     try:
         if not articles:
             return
@@ -358,7 +432,6 @@ def save_immigration_news(articles: list):
 
 
 def get_immigration_news(limit: int = 6) -> list:
-    """Get immigration news ordered by published_at desc."""
     try:
         response = (
             supabase.table("immigration_news")
@@ -373,8 +446,7 @@ def get_immigration_news(limit: int = 6) -> list:
         return []
 
 
-def get_last_news_fetch_time() -> datetime | None:
-    """Return fetched_at of the most recent row in immigration_news."""
+def get_last_news_fetch_time() -> Optional[datetime]:
     try:
         response = (
             supabase.table("immigration_news")
@@ -393,4 +465,3 @@ def get_last_news_fetch_time() -> datetime | None:
     except Exception as e:
         print(f"[get_last_news_fetch_time] Error: {e}")
         return None
-
