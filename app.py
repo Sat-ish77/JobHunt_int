@@ -83,6 +83,8 @@ if "user_email" not in st.session_state:
     st.session_state["user_email"] = None
 if "active_resume_id" not in st.session_state:
     st.session_state["active_resume_id"] = None
+if "uploaded_files_processed" not in st.session_state:
+    st.session_state["uploaded_files_processed"] = set()
 
 
 # ── Authentication Page ────────────────────────────────────
@@ -474,16 +476,18 @@ with tab2:
 
     if uploaded_files:
         for file in uploaded_files:
-            with st.spinner(f"Processing {file.name}..."):
-                try:
-                    content = parse_resume(file)
-                    embedding = get_embedding(content)
-                    save_resume(file.name, content, embedding)
-                    st.success(f"✅ Saved: {file.name}")
-                except ValueError as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(f"Error processing {file.name}: {e}")
+            if file.name not in st.session_state["uploaded_files_processed"]:
+                with st.spinner(f"Processing {file.name}..."):
+                    try:
+                        content = parse_resume(file)
+                        embedding = get_embedding(content)
+                        save_resume(file.name, content, embedding)
+                        st.session_state["uploaded_files_processed"].add(file.name)
+                        st.success(f"✅ Saved: {file.name}")
+                    except ValueError as e:
+                        st.error(str(e))
+                    except Exception as e:
+                        st.error(f"Error processing {file.name}: {e}")
 
     resumes = get_all_resumes()
 
@@ -558,15 +562,13 @@ with tab2:
         col_check1, col_check2 = st.columns(2)
         with col_check1:
             run_check = st.button("🔍 Run Check", key="run_resume_check")
-        with col_check2:
-            use_ai = st.toggle("Include AI review (~$0.001)", value=True, key="use_ai_check")
 
         if run_check and checker_matched:
             with st.spinner("Analyzing resume..."):
                 result = full_resume_check(
                     resume_text=checker_matched["content"],
                     target_role=target_role_input,
-                    use_gpt=use_ai,
+                    use_gpt=True,
                 )
 
             score = result["score"]
@@ -720,9 +722,9 @@ with tab3:
                 # ATS improvement tips
                 tips = job.get("rule_tips", [])
                 if tips:
-                    with st.expander("💡 How to improve your match"):
-                        for tip in tips:
-                            st.markdown(tip)
+                    st.markdown("**💡 How to improve your match**")
+                    for tip in tips:
+                        st.markdown(tip)
 
                 col3, col4 = st.columns(2)
                 with col3:
