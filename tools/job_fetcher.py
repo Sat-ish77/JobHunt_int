@@ -28,7 +28,13 @@ def _standard_job(
     source: str,
     posted_at: str = "",
 ) -> dict:
-    """Create a standard job dict."""
+    """Create a standard job dict.
+
+    We intentionally keep this minimal; quality/tier labels are added later
+    in :func:`search_all_jobs` once we know which source the job came from and
+    whether the employer exists in the H1B CSV.  This keeps the individual
+    fetchers simple and avoids duplication of sponsorship logic.
+    """
     return {
         "title": (title or "")[:200],
         "company": (company or "")[:200],
@@ -42,6 +48,9 @@ def _standard_job(
         "opt_friendly": False,
         "cpt_friendly": False,
         "explicitly_sponsors": False,
+        # tier_label and tier are set later
+        "tier_label": "",
+        "tier": 0,
     }
 
 
@@ -368,6 +377,35 @@ def check_explicitly_sponsors(description: str) -> bool:
         return False
 
 
+def assign_tier(job: dict) -> dict:
+    """Compute ``tier`` and ``tier_label`` for a single job dict.
+
+    This encapsulates the tier logic so that both :func:`search_all_jobs` and
+    any other consumer (e.g. the UI) can call it and stay in sync.
+    The function mutates the input dict and also returns it for convenience.
+    """
+    src = job.get("source", "").lower()
+    # make sure sponsorship status is known; the caller may have already set it
+    from utils.sponsorship_checker import check_sponsorship_history
+
+    if src in ("greenhouse", "lever"):
+        job["tier_label"] = "✅ Verified"
+        job["tier"] = 1
+    else:
+        # if not already computed, run the H1B lookup now
+        if not job.get("h1b_sponsor_history"):
+            sponsor = check_sponsorship_history(job.get("company", ""))
+            job["h1b_sponsor_history"] = sponsor.get("has_history", False)
+            job["h1b_approvals_count"] = sponsor.get("approvals", 0)
+        if job.get("h1b_sponsor_history"):
+            job["tier_label"] = "⚪ H1B Verified Company"
+            job["tier"] = 2
+        else:
+            job["tier_label"] = "⚠️ Unverified"
+            job["tier"] = 3
+    return job
+
+
 # ═══════════════════════════════════════════════════════════
 # MAIN AGGREGATOR
 # ═══════════════════════════════════════════════════════════
@@ -376,6 +414,23 @@ def search_all_jobs(role: str, location: str) -> list:
     """
     Search all job sources concurrently, combine, deduplicate,
     and enrich with sponsorship data.
+
+    This function also applies the "tiered" quality scheme requested by the
+    `Friend 1 Task` design note:
+
+    * **Tier 1** – Jobs discovered via the Greenhouse or Lever public APIs.  These
+      are labelled ``✅ Verified`` since they come directly from employer
+      career pages and are guaranteed to be live.
+    * **Tier 2** – Jobs from the RapidAPI/JSearch or Tavily engines where the
+      company name can be found in the H1B sponsor CSV.  These are marked
+      ``⚪ H1B Verified Company``.
+    * **Tier 3** – Any remaining jobs from those sources that do not match the
+      CSV, labelled ``⚠️ Unverified``.
+
+    The CSV cross‑check is performed using ``check_sponsorship_history`` and
+    its result is stored in the job dict as ``h1b_sponsor_history`` and
+    ``tier_label``.  Downstream code in ``app.py`` reads ``tier_label`` when
+    rendering each job.
     """
     try:
         # 1. Run async sources concurrently
@@ -426,9 +481,13 @@ def search_all_jobs(role: str, location: str) -> list:
                 sponsorship = check_sponsorship_history(company)
                 job["h1b_sponsor_history"] = sponsorship["has_history"]
                 job["h1b_approvals_count"] = sponsorship["approvals"]
+            # record whether the description itself mentions sponsorship
             job["explicitly_sponsors"] = check_explicitly_sponsors(
                 job.get("description", "")
             )
+
+            # delegate tier/label assignment to helper
+            assign_tier(job)
 
         return unique_jobs
 

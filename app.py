@@ -19,6 +19,8 @@ from database.supabase_client import (
     auth_sign_in,
     auth_sign_up,
     auth_sign_out,
+    auth_reset_password,
+    reset_password_with_token as auth_reset_password_with_token,
     set_user,
     set_session,
     clear_conversation_history,
@@ -39,7 +41,7 @@ from database.supabase_client import (
 )
 from tools.embeddings import get_embedding
 from tools.immigration_news import get_all_immigration_news
-from tools.job_fetcher import search_all_jobs
+from tools.job_fetcher import search_all_jobs, assign_tier
 from tools.resume_parser import parse_resume
 from agents.career_coach import chat_with_coach
 from agents.resume_agent import generate_cover_letter, rewrite_resume_for_job
@@ -89,7 +91,36 @@ if "uploaded_files_processed" not in st.session_state:
 
 # ── Authentication Page ────────────────────────────────────
 def show_login_page():
-    """Display login/signup page for unauthenticated users."""
+    """Display login/signup page for unauthenticated users.
+
+    This function also handles the callback from Supabase's password recovery
+    link.  When the user clicks the email, Supabase redirects back to the
+    app with query parameters such as ``type=recovery`` and ``access_token``.
+    We detect those parameters, optionally log the user in, and present a form
+    to choose a new password.
+    """
+    # --- handle recovery link / query parameters ---------------------------
+    params = st.experimental_get_query_params()
+    recovery_token = None
+    if params.get("type") == ["recovery"]:
+        # token can come as 'access_token' or 'token'
+        recovery_token = params.get("access_token", params.get("token", [None]))[0]
+        # if refresh token exists we can bootstrap the session
+        refresh = params.get("refresh_token", [None])[0]
+        if recovery_token and refresh:
+            try:
+                from database.supabase_client import supabase
+
+                supabase.auth.set_session(recovery_token, refresh)
+                # update st.session_state so show_login_page is bypassed
+                st.session_state["user"] = supabase.auth.get_session().user
+                st.session_state["session"] = supabase.auth.get_session()
+                # set email if available
+                st.session_state["user_email"] = params.get("email", [""])[0]
+                st.success("You are now logged in. Please set a new password below.")
+            except Exception:
+                pass
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.image("https://cdn-icons-png.flaticon.com/512/163/163801.png", width=80)
@@ -100,46 +131,85 @@ def show_login_page():
         
         # ── LOGIN TAB ──
         with tab_login:
-            st.subheader("Welcome Back!")
-            login_email = st.text_input(
-                "Email", 
-                placeholder="your@email.com",
-                key="login_email"
-            )
-            login_password = st.text_input(
-                "Password",
-                type="password",
-                key="login_password"
-            )
-            
-            if st.button("🔓 Sign In", use_container_width=True):
-                if not login_email or not login_password:
-                    st.error("Please enter email and password.")
-                else:
-                    with st.spinner("Signing in..."):
-                        result = auth_sign_in(login_email, login_password)
-                        if result.get("needs_confirmation"):
-                            st.warning(
-                                f"📧 Your email ({login_email}) hasn't been confirmed yet. "
-                                f"Check your inbox for a confirmation link and verify your email, then try logging in again."
-                            )
-                        elif result["error"]:
-                            st.error(f"Login failed: {result['error']}")
-                        elif result["user"] and result["session"]:
-                            st.session_state["user"] = result["user"]
-                            st.session_state["session"] = result["session"]
-                            st.session_state["user_email"] = login_email
-                            user_id = result["user"].id if hasattr(result["user"], "id") else login_email
-                            set_user(user_id)
-                            # ── SET SESSION so RLS auth.uid() works ──
-                            set_session(
-                                result["session"].access_token,
-                                result["session"].refresh_token,
-                            )
-                            st.success("✅ Signed in! Refreshing...")
-                            st.rerun()
-                        else:
-                            st.error("Sign in failed. Please check your email and password.")
+            # if we have a recovery token, show the reset form instead of normal login
+            if recovery_token and not st.session_state.get("user"):
+                st.info("It looks like you're resetting your password. Enter a new one below.")
+                new_pw = st.text_input("New password", type="password", key="new_pw")
+                new_pw_confirm = st.text_input(
+                    "Confirm new password", type="password", key="new_pw_confirm"
+                )
+                if st.button("🔄 Update Password", key="update_pw"):
+                    if not new_pw or not new_pw_confirm:
+                        st.error("Please fill in both password fields.")
+                    elif new_pw != new_pw_confirm:
+                        st.error("Passwords do not match.")
+                    elif len(new_pw) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    else:
+                        with st.spinner("Setting new password..."):
+                            result = auth_reset_password_with_token(recovery_token, new_pw)
+                            if result.get("error"):
+                                st.error(f"Could not reset password: {result['error']}")
+                            else:
+                                st.success("✅ Password updated! You can now log in using your new password.")
+                                # clear the query params by reloading without them
+                                st.experimental_set_query_params()
+                                st.rerun()
+            else:
+                login_email = st.text_input(
+                    "Email", 
+                    placeholder="your@email.com",
+                    key="login_email"
+                )
+                login_password = st.text_input(
+                    "Password",
+                    type="password",
+                    key="login_password"
+                )
+                
+                if st.button("🔓 Sign In", use_container_width=True):
+                    if not login_email or not login_password:
+                        st.error("Please enter email and password.")
+                    else:
+                        with st.spinner("Signing in..."):
+                            result = auth_sign_in(login_email, login_password)
+                            if result.get("needs_confirmation"):
+                                st.warning(
+                                    f"📧 Your email ({login_email}) hasn't been confirmed yet. "
+                                    f"Check your inbox for a confirmation link and verify your email, then try logging in again."
+                                )
+                            elif result["error"]:
+                                st.error(f"Login failed: {result['error']}")
+                            elif result["user"] and result["session"]:
+                                st.session_state["user"] = result["user"]
+                                st.session_state["session"] = result["session"]
+                                st.session_state["user_email"] = login_email
+                                # Set user ID for database operations
+                                user_id = result["user"].id if hasattr(result["user"], "id") else login_email
+                                set_user(user_id)
+                                st.success("✅ Signed in! Refreshing...")
+                                st.rerun()
+                            else:
+                                st.error("Sign in failed. Please check your email and password.")
+            with st.expander("Forgot Password?"):
+                reset_email = st.text_input(
+                    "Email to reset",
+                    placeholder="your@email.com",
+                    key="reset_email",
+                )
+                if st.button("Send reset link", key="send_reset"):
+                    if not reset_email:
+                        st.error("Please enter your email address.")
+                    else:
+                        with st.spinner("Sending reset link..."):
+                            result = auth_reset_password(reset_email)
+                            if result.get("error"):
+                                st.error(f"Failed to send reset email: {result['error']}")
+                            else:
+                                st.success(
+                                    "If that address is registered, you will receive an email with instructions to reset your password. "
+                                    "Please check your inbox (and spam folder)."
+                                )
         
         # ── SIGNUP TAB ──
         with tab_signup:
@@ -672,6 +742,11 @@ with tab3:
                 st.warning("No jobs found. Try broader role or location.")
 
     jobs = get_all_jobs()
+    # legacy rows might not include the new tier_label / tier fields; compute them
+    if jobs:
+        for job in jobs:
+            if not job.get("tier_label"):
+                assign_tier(job)
 
     active_resume = None
     if st.session_state.get("active_resume_id"):
@@ -705,7 +780,8 @@ with tab3:
                 f"{job.get('title', '?')} — "
                 f"{job.get('company', '?')} | "
                 f"{job.get('location', '?')} | "
-                f"[{job.get('source', '?')}]"
+                f"[{job.get('source', '?')}] "
+                f"{job.get('tier_label', '')}"
             )
 
             with st.expander(header):
@@ -721,6 +797,10 @@ with tab3:
                         st.success(f"✅ H1B Verified ({job.get('h1b_approvals_count', 0)} approvals)")
                     else:
                         st.caption("⚪ No H1B history found")
+                    # show the overall quality tier/label
+                    tier = job.get("tier_label", "")
+                    if tier:
+                        st.info(f"Source quality: {tier}")
 
                 if job.get("explicitly_sponsors"):
                     st.info("🎯 Mentions sponsorship in job description")

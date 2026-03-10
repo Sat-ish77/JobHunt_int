@@ -127,6 +127,64 @@ def auth_sign_in(email: str, password: str) -> dict:
         }
 
 
+def auth_reset_password(email: str) -> dict:
+    """Trigger Supabase to send a password-reset email to the given address.
+
+    If the repository sets the environment variable
+    ``SUPABASE_PASSWORD_RESET_URL`` this value will be passed to the API as
+    ``redirect_to`` so that the email link brings the user back into our
+    Streamlit app instead of a generic Supabase page.
+
+    Supabase will silently succeed even if the address is not registered, so the
+    return value mostly exists to surface unexpected errors.
+
+    Returns a dict: {data, error}
+    """
+    try:
+        options = {}
+        redirect = os.getenv("SUPABASE_PASSWORD_RESET_URL")
+        if redirect:
+            options["redirect_to"] = redirect
+        resp = supabase.auth.reset_password_for_email(email, options)
+        error = getattr(resp, "error", None) or (resp.get("error") if isinstance(resp, dict) else None)
+        return {"data": resp, "error": error}
+    except Exception as e:
+        print(f"[auth_reset_password] Exception: {e}")
+        return {"data": None, "error": str(e)}
+
+
+def reset_password_with_token(access_token: str, new_password: str) -> dict:
+    """Given a recovery token from the email link, set a new password.
+
+    This function performs a direct HTTP request against the Supabase
+    ``/auth/v1/user`` endpoint using the provided token as a bearer token.  It
+    does **not** require the user to already have an active session in our
+    client.
+
+    Returns a dict: {data, error}.  ``data`` will contain the updated user
+    object on success; ``error`` will be a string message on failure.
+    """
+    try:
+        import httpx
+
+        url = f"{SUPABASE_URL}/auth/v1/user"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        resp = httpx.put(url, json={"password": new_password}, headers=headers, timeout=10)
+        try:
+            body = resp.json()
+        except Exception:
+            body = None
+        if resp.status_code >= 400:
+            return {"data": body, "error": resp.text}
+        return {"data": body, "error": None}
+    except Exception as e:
+        print(f"[reset_password_with_token] Exception: {e}")
+        return {"data": None, "error": str(e)}
+
+
 def auth_sign_out():
     """Sign out and clear the session."""
     try:
@@ -270,12 +328,29 @@ def delete_resume(resume_id: str):
 # ═══════════════════════════════════════════════════════════
 
 def save_jobs(jobs: list) -> list:
+    """Upsert jobs on the url column, ignoring conflicts.
+
+    The list coming from ``search_all_jobs`` may contain transient fields such as
+    ``tier_label`` and ``tier`` that are not columns in the database.  Postgres
+    would raise an error if unknown columns are provided, so we strip them here.
+    """
     try:
         if not jobs:
             return []
+        # drop any keys not present in the jobs table schema
+        sanitized = []
+        for job in jobs:
+            if isinstance(job, dict):
+                sanitized.append({
+                    k: v
+                    for k, v in job.items()
+                    if k not in ("tier_label", "tier")
+                })
+            else:
+                sanitized.append(job)
         response = (
             supabase.table("jobs")
-            .upsert(jobs, on_conflict="url")
+            .upsert(sanitized, on_conflict="url")
             .execute()
         )
         return response.data or []
