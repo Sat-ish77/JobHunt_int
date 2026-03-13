@@ -100,9 +100,9 @@ def show_login_page():
     to choose a new password.
     """
     # --- handle recovery link / query parameters ---------------------------
-    params = st.experimental_get_query_params()
+    params = st.query_params
     recovery_token = None
-    if params.get("type") == ["recovery"]:
+    if params.get("type") == "recovery":
         # token can come as 'access_token' or 'token'
         recovery_token = params.get("access_token", params.get("token", [None]))[0]
         # if refresh token exists we can bootstrap the session
